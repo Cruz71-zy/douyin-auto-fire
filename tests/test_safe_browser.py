@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from playwright.async_api import async_playwright
 
-from app.safe_chat import SafeChat
+from app.safe_chat import SafeChat, TargetCheckError
 from app.safe_sender import send_once
 from app.douyin import PageOperationError
 from app import safe_main as runner
@@ -156,3 +156,29 @@ async def test_avatar_popup_requires_exact_configured_uid(page, profile_uid, all
             await chat._search_result('好友A')
     assert len(page.context.pages) == 1
     assert await page.evaluate('clicks') == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source,uid,allowed', [
+    ('props','uidAAAA',True), ('owner','uidAAAA',True), ('attribute','uidAAAA',True),
+    ('props','uidBBBB',False), ('array','uidAAAA',False), ('conflict','uidAAAA',False),
+])
+async def test_scoped_client_identity_requires_exact_subject(page, source, uid, allowed):
+    await page.locator('#results a').evaluate('(e)=>e.remove()')
+    await page.locator('#results .SearchPanelitembox').evaluate('''(row,config)=>{
+        const user={nickname:'好友A',sec_uid:config.uid};
+        if(config.source==='props')row.__reactProps$test={user};
+        if(config.source==='owner')row.__reactFiber$test={memoizedProps:{},return:{memoizedProps:{user}}};
+        if(config.source==='attribute')row.setAttribute('data-sec-uid',config.uid);
+        if(config.source==='array')row.__reactProps$test={data:[user]};
+        if(config.source==='conflict')row.__reactProps$test={user,item:{nickname:'好友A',sec_uid:'uidBBBB'}};
+    }''', {'source':source,'uid':uid})
+    chat=SafeChat(page,expected_uid='uidAAAA')
+    if allowed:
+        await chat._search_result('好友A')
+        assert chat.resolved_uid=='uidAAAA'
+    else:
+        with pytest.raises(TargetCheckError):
+            await chat._search_result('好友A')
+    assert len(page.context.pages)==1
+    assert await page.evaluate('clicks')==0

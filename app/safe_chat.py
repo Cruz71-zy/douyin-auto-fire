@@ -28,7 +28,49 @@ SAFE_REASONS = {
     "profile_popup_missing": "头像未打开可核验的独立个人主页",
     "profile_replaced_chat": "个人主页替换了聊天页面，无法保持身份绑定",
     "avatar_ambiguous": "网页没有唯一可操作的头像入口",
+    "metadata_ambiguous": "同一聊天条目的客户端身份字段相互冲突",
 }
+
+
+# Read only identity data attached to this row/header and its immediate rendering
+# owner, not application stores, network responses or unrelated result collections.
+IDENTITY_METADATA_JS = r"""(root, expectedName) => {
+    const ids=new Set(), seen=new WeakSet(); let records=0, attributes=0;
+    const secKeys=['sec_uid','secUid','secUID','sec_user_id','secUserId','secUserID','sec_id','secId'];
+    const nameKeys=['nickname','nick_name','nickName','display_name','displayName','name'];
+    const subjects=['user','userInfo','user_info','item','data','friend','contact','profile','info',
+        'peer','peerInfo','targetUser','userProfile','conversation','conversationInfo'];
+    const valid=value=>typeof value==='string'&&/^[A-Za-z0-9_-]{6,200}$/.test(value);
+    const own=(object,key)=>{
+        try { const d=Object.getOwnPropertyDescriptor(object,key);return d&&'value' in d?d.value:undefined; }
+        catch { return undefined; }
+    };
+    const record=(object,depth=0)=>{
+        if(!object||typeof object!=='object'||Array.isArray(object)||depth>3||seen.has(object))return;
+        seen.add(object);
+        const names=nameKeys.map(key=>own(object,key)).filter(value=>typeof value==='string');
+        const values=secKeys.map(key=>own(object,key)).filter(valid);
+        if(values.length){records++;if(names.some(value=>value.trim()===expectedName))values.forEach(value=>ids.add(value));}
+        for(const key of subjects)record(own(object,key),depth+1);
+    };
+    const nodes=[root,...root.querySelectorAll('*')].slice(0,65);
+    for(const node of nodes){
+        for(const key of ['data-sec-uid','data-secuid','data-user-sec-uid']){
+            const value=node.getAttribute(key);if(valid(value)){attributes++;ids.add(value);}
+        }
+        for(const key of Object.keys(node)){
+            if(key.startsWith('__reactProps$'))record(own(node,key));
+            if(key.startsWith('__reactFiber$')){
+                const fiber=own(node,key);if(!fiber)continue;
+                record(own(fiber,'memoizedProps'));
+                // Only the root's immediate rendering owner is inspected. Never
+                // walk up to a results collection or traverse array/children data.
+                if(node===root){const owner=own(fiber,'return');if(owner)record(own(owner,'memoizedProps'));}
+            }
+        }
+    }
+    return {ids:[...ids],records,attributes};
+}"""
 
 
 class TargetCheckError(PageOperationError):
@@ -90,13 +132,43 @@ class SafeChat(DouyinChat):
         self.resolved_uid = None
         self.report = report or (lambda message: None)
 
-    async def _identity(self, scope):
+    async def _identity(self, scope, name):
         try:
             return await profile_id(scope)
         except TargetCheckError as exc:
             if exc.code != "profile_missing":
                 raise
+            uid = await self._identity_from_metadata(scope, name)
+            if uid is not None:
+                return uid
             return await self._identity_from_avatar(scope)
+
+    async def _identity_from_metadata(self, scope, name):
+        try:
+            evidence = await scope.evaluate(IDENTITY_METADATA_JS, name)
+        except Exception:
+            self.report("客户端身份检查：当前条目未提供可读的身份字段")
+            return None
+        if not isinstance(evidence, dict) or not isinstance(evidence.get("ids"), list):
+            return None
+        ids = evidence["ids"]
+        if any(not isinstance(uid, str) or not uid for uid in ids):
+            raise TargetCheckError("metadata_ambiguous")
+        ids = set(ids)
+        records = evidence.get("records", 0)
+        attributes = evidence.get("attributes", 0)
+        records = min(1000, max(0, records)) if type(records) is int else 0
+        attributes = min(1000, max(0, attributes)) if type(attributes) is int else 0
+        self.report(f"客户端身份检查：关联身份记录 {records}，身份属性 {attributes}，同名固定标识 {len(ids)}")
+        if len(ids) > 1:
+            raise TargetCheckError("metadata_ambiguous")
+        if not ids:
+            return None
+        uid = ids.pop()
+        if self.expected_uid is not None and uid != self.expected_uid:
+            raise TargetCheckError("uid_mismatch")
+        self.report("客户端身份检查：当前条目的固定标识已精确核验")
+        return uid
 
     async def _identity_from_avatar(self, scope):
         # Some builds use window.open on an avatar rather than an <a> element.
@@ -226,7 +298,7 @@ class SafeChat(DouyinChat):
             exact_count += 1
             # Require a visible personal profile link, never a group/fuzzy match.
             try:
-                uid = await self._identity(row)
+                uid = await self._identity(row, name)
             except TargetCheckError:
                 self.report(f"搜索检查：结果节点 {row_count}，可见 {visible_count}，昵称精确匹配 {exact_count}，个人主页标识不可确认")
                 raise
@@ -253,7 +325,7 @@ class SafeChat(DouyinChat):
         if len(matches) != 1 or self.resolved_uid is None:
             return TargetCheckError("title_mismatch")
         try:
-            if await self._identity(matches[0]) != self.resolved_uid:
+            if await self._identity(matches[0], name) != self.resolved_uid:
                 return TargetCheckError("uid_mismatch")
         except PageOperationError as exc:
             return exc
