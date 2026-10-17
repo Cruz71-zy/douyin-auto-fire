@@ -85,10 +85,31 @@ async def test_sec_uid_disambiguates_same_nickname(page):
 
 
 @pytest.mark.asyncio
-async def test_missing_profile_stops(page):
+async def test_search_row_without_profile_defers_proof_to_header(page):
     await page.locator('#results a').evaluate('(e)=>e.remove()')
+    chat=SafeChat(page, expected_uid='uidAAAA')
+    await chat._search_result('好友A')
+    assert chat.resolved_uid is None
+    await chat.confirm_identity('好友A')
+    assert chat.resolved_uid == 'uidAAAA'
+    assert await page.evaluate('clicks') == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('header_uid', [None, 'uidBBBB'])
+async def test_deferred_header_proof_missing_or_wrong_never_sends(page, header_uid):
+    await page.locator('#results a').evaluate('(e)=>e.remove()')
+    if header_uid is None:
+        await page.locator('#profile').evaluate('(e)=>e.remove()')
+    else:
+        await page.locator('#profile').evaluate('(e,uid)=>e.href="/user/"+uid', header_uid)
+    chat=SafeChat(page, expected_uid='uidAAAA')
+    await chat._search_result('好友A')
     with pytest.raises(PageOperationError):
-        await SafeChat(page)._search_result('好友A')
+        await send_once(chat, '好友A', '🔥', lambda: None)
+    assert chat.resolved_uid is None
+    assert await page.evaluate('clicks') == 0
+    assert await page.locator('[contenteditable]').inner_text() == ''
 
 
 @pytest.mark.asyncio
@@ -149,12 +170,12 @@ async def test_avatar_popup_requires_exact_configured_uid(page, profile_uid, all
     await page.locator('#results .test-avatar').evaluate(
         "(image,uid)=>{image.onclick=()=>window.open('/user/'+uid,'_blank');}", profile_uid)
     chat = SafeChat(page, expected_uid='uidAAAA')
+    row = page.locator('#results .SearchPanelitembox')
     if allowed:
-        await chat._search_result('好友A')
-        assert chat.resolved_uid == 'uidAAAA'
+        assert await chat._identity(row, '好友A') == 'uidAAAA'
     else:
         with pytest.raises(PageOperationError):
-            await chat._search_result('好友A')
+            await chat._identity(row, '好友A')
     assert len(page.context.pages) == 1
     assert await page.evaluate('clicks') == 0
 
@@ -175,12 +196,12 @@ async def test_scoped_client_identity_requires_exact_subject(page, source, uid, 
         if(config.source==='conflict')row.__reactProps$test={user,item:{nickname:'好友A',sec_uid:'uidBBBB'}};
     }''', {'source':source,'uid':uid})
     chat=SafeChat(page,expected_uid='uidAAAA')
+    row=page.locator('#results .SearchPanelitembox')
     if allowed:
-        await chat._search_result('好友A')
-        assert chat.resolved_uid=='uidAAAA'
+        assert await chat._identity(row, '好友A')=='uidAAAA'
     else:
         with pytest.raises(TargetCheckError):
-            await chat._search_result('好友A')
+            await chat._identity(row, '好友A')
     assert len(page.context.pages)==1
     assert await page.evaluate('clicks')==0
 

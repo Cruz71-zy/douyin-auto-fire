@@ -284,6 +284,35 @@ class SafeChat(DouyinChat):
         return visible[0]
 
     async def _search_result(self, name):
+        candidates = []
+        rows = self.page.locator(ROWS)
+        for index in range(await rows.count()):
+            row = rows.nth(index)
+            if (await row.is_visible() and
+                    await _visible_exact_text_locator(row, NAMES, name) is not None):
+                candidates.append(row)
+        # Opening a conversation is navigation, not permission to send. The real
+        # search row has no profile identifier; defer identity proof to its header.
+        # Never use this path to choose between duplicate names.
+        if len(candidates) == 1:
+            row = candidates[0]
+            try:
+                uid = await profile_id(row)
+            except TargetCheckError as exc:
+                if exc.code != 'profile_missing':
+                    raise
+                uid = await self._identity_from_metadata(row, name)
+            if uid is not None and self.expected_uid is not None and uid != self.expected_uid:
+                raise TargetCheckError('uid_mismatch')
+            buttons = row.locator('[class*="SearchPanelitemchat_btn"]')
+            if await buttons.count() != 1 or not await buttons.is_visible():
+                raise TargetCheckError('button_ambiguous')
+            if uid is not None:
+                if self.resolved_uid is not None and self.resolved_uid != uid:
+                    raise TargetCheckError('uid_mismatch')
+                self.resolved_uid = uid
+            self.report('搜索检查：唯一昵称用于打开聊天；发送前仍须核验聊天头固定标识')
+            return buttons
         matches = []
         rows = self.page.locator(ROWS)
         row_count = await rows.count()
@@ -311,7 +340,10 @@ class SafeChat(DouyinChat):
         self.report(f"搜索检查：结果节点 {row_count}，可见 {visible_count}，昵称精确匹配 {exact_count}，固定标识匹配 {uid_count}")
         if len(matches) != 1:
             raise TargetCheckError("search_ambiguous")
-        button, self.resolved_uid = matches[0]
+        button, uid = matches[0]
+        if self.resolved_uid is not None and uid != self.resolved_uid:
+            raise TargetCheckError('uid_mismatch')
+        self.resolved_uid = uid
         return button
 
     async def _chat_open_error(self, name):
@@ -322,15 +354,18 @@ class SafeChat(DouyinChat):
             header = headers.nth(i)
             if await header.is_visible() and await _visible_exact_text_locator(header, TITLES, name) is not None:
                 matches.append(header)
-        if len(matches) != 1 or self.resolved_uid is None:
+        if len(matches) != 1:
             return TargetCheckError("title_mismatch")
         try:
-            if await self._identity(matches[0], name) != self.resolved_uid:
+            uid = await self._identity(matches[0], name)
+            if ((self.expected_uid is not None and uid != self.expected_uid) or
+                    (self.resolved_uid is not None and uid != self.resolved_uid)):
                 return TargetCheckError("uid_mismatch")
         except PageOperationError as exc:
             return exc
         if not await self._composer_visible():
             return TargetCheckError("composer_missing")
+        self.resolved_uid = uid
         return None
 
     async def confirm_identity(self, name):

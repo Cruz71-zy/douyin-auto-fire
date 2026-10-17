@@ -6,6 +6,7 @@ from app.sender import (_mark_latest_outgoing_message, _trigger_send,
 
 async def send_once(chat, name, content, check_date):
     page = chat.page
+    await chat.confirm_identity(name)
     editor = await chat.message_input()
     if (await editor.inner_text()).strip():
         raise PageOperationError("存在未发送草稿，停止操作")
