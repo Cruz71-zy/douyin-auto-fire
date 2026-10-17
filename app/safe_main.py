@@ -18,7 +18,7 @@ from app.browser import (AuthenticationError, RiskControlError, SearchBoxNotRead
 from app.config import ConfigError, load_settings, load_task, parse_auth_json
 from app.douyin import PageOperationError
 from app.durable_state import GitHubJournal, StateError
-from app.safe_chat import SafeChat, ensure_session
+from app.safe_chat import SafeChat, TargetCheckError, SAFE_REASONS, ensure_session
 from app.selectors import DOUYIN_CHAT_URL, SEARCH_INPUTS
 from app.douyin import first_visible
 from app.safe_sender import send_once
@@ -105,6 +105,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             # Resolve every target before any reservation or message.
             for index, target in enumerate(task.targets):
                 chat = SafeChat(page, expected_uid=uids[index],
+                                report=lambda message, number=index + 1: event(f"好友#{number}：{message}"),
                                 timeout_ms=int(task.target_open_timeout_seconds * 1000))
                 await chat.open_target(target.name, retries=0)
                 await chat.confirm_identity(target.name)
@@ -186,6 +187,9 @@ def main(argv=None):
         event("最终状态：failed；登录失效或无法确认，请本人重新登录并更新凭证")
     except RiskControlError:
         event("最终状态：failed；需要本人完成平台安全验证，停止任务")
+    except TargetCheckError as exc:
+        reason = SAFE_REASONS.get(exc.code, "好友身份无法确认")
+        event(f"最终状态：failed；好友检查未通过：{reason}；停止任务")
     except (PageOperationError, SearchBoxNotReadyError):
         event("最终状态：failed；好友匹配、个人主页标识或页面控件无法确认，停止任务")
     except StateError:

@@ -15,6 +15,22 @@ TITLES = tuple(f'[class*="{x}"]' for x in (
     "RightPanelHeader-title", "chatHeadertitle", "ChatHeaderTitle",
     "chatHeader_title", "ChatHeader-title"))
 
+SAFE_REASONS = {
+    "profile_missing": "没有可见且唯一的个人主页链接",
+    "search_ambiguous": "搜索结果不存在或不是唯一匹配",
+    "button_ambiguous": "好友操作按钮不唯一",
+    "title_mismatch": "当前聊天标题不唯一或不一致",
+    "uid_mismatch": "当前聊天的固定身份标识不一致",
+    "composer_missing": "当前聊天输入框不可用",
+    "editor_ambiguous": "聊天编辑器不唯一",
+}
+
+
+class TargetCheckError(PageOperationError):
+    def __init__(self, code):
+        self.code = code if code in SAFE_REASONS else "search_ambiguous"
+        super().__init__(SAFE_REASONS[self.code])
+
 
 async def ensure_session(page):
     if await _any_visible(page, RISK_MARKERS + (
@@ -44,15 +60,16 @@ async def profile_id(scope):
         if len(parts) == 2 and parts[0] == "user" and parts[1]:
             ids.add(parts[1])
     if len(ids) != 1:
-        raise PageOperationError("无法确认唯一个人主页标识，停止发送")
+        raise TargetCheckError("profile_missing")
     return ids.pop()
 
 
 class SafeChat(DouyinChat):
-    def __init__(self, page, expected_uid=None, **kwargs):
+    def __init__(self, page, expected_uid=None, report=None, **kwargs):
         super().__init__(page, **kwargs)
         self.expected_uid = expected_uid
         self.resolved_uid = None
+        self.report = report or (lambda message: None)
 
     async def _open_target_once(self, name):
         await ensure_session(self.page)
@@ -74,27 +91,37 @@ class SafeChat(DouyinChat):
             if await editor.is_visible():
                 visible.append(editor)
         if len(visible) != 1:
-            raise PageOperationError("聊天编辑器不唯一")
+            raise TargetCheckError("editor_ambiguous")
         return visible[0]
 
     async def _search_result(self, name):
         matches = []
         rows = self.page.locator(ROWS)
-        for i in range(await rows.count()):
+        row_count = await rows.count()
+        visible_count = exact_count = uid_count = 0
+        for i in range(row_count):
             row = rows.nth(i)
             if not await row.is_visible():
                 continue
+            visible_count += 1
             if await _visible_exact_text_locator(row, NAMES, name) is None:
                 continue
+            exact_count += 1
             # Require a visible personal profile link, never a group/fuzzy match.
-            uid = await profile_id(row)
+            try:
+                uid = await profile_id(row)
+            except TargetCheckError:
+                self.report(f"搜索检查：结果节点 {row_count}，可见 {visible_count}，昵称精确匹配 {exact_count}，个人主页标识不可确认")
+                raise
             if self.expected_uid is None or uid == self.expected_uid:
+                uid_count += 1
                 buttons = row.locator('[class*="SearchPanelitemchat_btn"]')
                 if await buttons.count() != 1 or not await buttons.is_visible():
-                    raise PageOperationError("好友操作按钮不唯一")
+                    raise TargetCheckError("button_ambiguous")
                 matches.append((buttons, uid))
+        self.report(f"搜索检查：结果节点 {row_count}，可见 {visible_count}，昵称精确匹配 {exact_count}，固定标识匹配 {uid_count}")
         if len(matches) != 1:
-            raise PageOperationError("好友不存在或匹配不唯一，停止发送")
+            raise TargetCheckError("search_ambiguous")
         button, self.resolved_uid = matches[0]
         return button
 
@@ -107,14 +134,14 @@ class SafeChat(DouyinChat):
             if await header.is_visible() and await _visible_exact_text_locator(header, TITLES, name) is not None:
                 matches.append(header)
         if len(matches) != 1 or self.resolved_uid is None:
-            return PageOperationError("当前聊天标题不唯一或不一致")
+            return TargetCheckError("title_mismatch")
         try:
             if await profile_id(matches[0]) != self.resolved_uid:
-                return PageOperationError("当前聊天个人标识不一致")
+                return TargetCheckError("uid_mismatch")
         except PageOperationError as exc:
             return exc
         if not await self._composer_visible():
-            return PageOperationError("当前聊天输入框不可用")
+            return TargetCheckError("composer_missing")
         return None
 
     async def confirm_identity(self, name):
