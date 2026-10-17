@@ -69,6 +69,22 @@ def event(message):
     print(f"{datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(timespec='seconds')} {message}", flush=True)
 
 
+def exception_summary(exc, stage="unknown"):
+    """Log only fixed identifiers: stage label, class name and a whitelisted code.
+
+    Exception messages, locators, URLs, nicknames, cookies and page text never
+    reach the log, so a failure stays diagnosable without leaking user data.
+    """
+    name = type(exc).__name__
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,40}", name):
+        name = "Exception"
+    label = stage if re.fullmatch(r"[a-z_]{1,40}", str(stage)) else "unknown"
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code in SAFE_REASONS:
+        return f"失败细节：阶段 {label}；类型 {name}；代码 {code}"
+    return f"失败细节：阶段 {label}；类型 {name}"
+
+
 def today():
     return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
@@ -147,6 +163,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             return 0
     reserved = False
     attempted = False
+    chats = []
     try:
         async with open_douyin(settings) as session:
             page = session.page
@@ -161,8 +178,11 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                 chat = SafeChat(page, expected_uid=uids[index],
                                 report=lambda message, number=index + 1: event(f"好友#{number}：{message}"),
                                 timeout_ms=int(task.target_open_timeout_seconds * 1000))
+                chat.stage = "preflight_open"
                 await chat.open_target(target.name, retries=0)
+                chat.stage = "preflight_identity"
                 await chat.confirm_identity(target.name)
+                chat.stage = "preflight_editor"
                 await chat.message_input()  # Check the actual sender's editor before reservation.
                 if chat.resolved_uid in resolved:
                     raise PageOperationError("多个配置指向同一好友")
@@ -183,7 +203,9 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             for index, (target, chat) in enumerate(zip(task.targets, chats)):
                 if today() != day:
                     raise StateError("运行跨越日期，停止发送")
+                chat.stage = "send_reopen"
                 await chat.open_target(target.name, retries=0)
+                chat.stage = "send_identity"
                 await chat.confirm_identity(target.name)
                 message = random.choice(candidates[index])
                 # Upstream sender validates a new outgoing bubble and failure/pending markers.
@@ -192,6 +214,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                     if today() != day:
                         raise StateError("运行跨越日期，停止发送")
                 await send_once(chat, target.name, message.content, check_date)
+                chat.stage = "post_send_identity"
                 await chat.confirm_identity(target.name)
                 event(f"好友#{index + 1}：发送成功（新消息及页面发送状态已确认）")
                 if index + 1 < len(chats):
@@ -199,12 +222,15 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             journal.finish(day, "success")
             event("最终状态：success")
             return 0
-    except Exception:
+    except Exception as exc:
+        stage = getattr(chats[-1], "stage", "preflight") if chats else "preflight"
         if reserved:
             try:
                 journal.finish(day, "unknown")
             except Exception:
                 pass  # Durable reservation already blocks all subsequent runs today.
+        # Diagnostics carry only a fixed step label, class name and whitelisted code.
+        event(exception_summary(exc, stage))
         if attempted:
             event("最终状态：unknown；状态未知，当天禁止自动重试")
             return 1

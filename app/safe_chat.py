@@ -132,6 +132,8 @@ class SafeChat(DouyinChat):
         super().__init__(page, **kwargs)
         self.expected_uid = expected_uid
         self.resolved_uid = None
+        # Fixed step label used only for diagnostics; never carries page data.
+        self.stage = "init"
         self.report = report or (lambda message: None)
 
     async def _identity(self, scope, name):
