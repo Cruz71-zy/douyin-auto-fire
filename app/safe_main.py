@@ -73,6 +73,24 @@ def today():
     return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
 
+def one_shot_allowed(task, candidates, uids):
+    # A dated opt-in in the private config authorizes one manual message while
+    # ENABLE_REAL_SEND remains false. The durable daily reservation still applies.
+    if os.getenv('GITHUB_EVENT_NAME') != 'workflow_dispatch':
+        return False
+    try:
+        authorization = json.loads(os.getenv('DOUYIN_CONFIG', '{}')).get('one_shot')
+        return (isinstance(authorization, dict)
+                and set(authorization) == {'date', 'sec_uid', 'text'}
+                and authorization['date'] == today()
+                and len(task.targets) == len(candidates) == len(uids) == 1
+                and bool(uids[0]) and authorization['sec_uid'] == uids[0]
+                and len(candidates[0]) == 1
+                and authorization['text'] == candidates[0][0].content)
+    except (ValueError, AttributeError, TypeError, KeyError, IndexError):
+        return False
+
+
 def load_safe_config():
     settings = load_settings()
     # This entry point never captures page data or invokes upstream notifications.
@@ -210,7 +228,9 @@ def main(argv=None):
         settings, task, candidates, uids = load_safe_config()
         dry_run = not args.send or args.dry_run
         if not dry_run and os.getenv("ENABLE_REAL_SEND") != "true":
-            raise ConfigError("正式发送尚未明确启用")
+            if not one_shot_allowed(task, candidates, uids):
+                raise ConfigError("正式发送尚未明确启用")
+            event('仅本日手动单条发送已授权；每日真实发送保持关闭')
         if not dry_run and os.getenv("GITHUB_ACTIONS") != "true":
             raise ConfigError("正式发送仅允许在 GitHub Actions 中执行")
         journal = None if dry_run else GitHubJournal.from_env()

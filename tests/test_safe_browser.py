@@ -119,6 +119,24 @@ async def test_header_name_variants_and_nested_prefix_require_uid(page, wrapper,
 
 
 @pytest.mark.asyncio
+async def test_reopening_same_friend_refreshes_controlled_search(page):
+    await page.evaluate('''()=>{
+        const input=document.querySelector('input'), results=document.querySelector('#results');
+        let previous='';results.hidden=true;
+        input.addEventListener('input',()=>{
+            if(input.value===previous)return;
+            previous=input.value;results.hidden=!input.value;
+        });
+        document.querySelector('.SearchPanelitemchat_btn').addEventListener('click',()=>results.hidden=true);
+    }''')
+    chat=SafeChat(page,expected_uid='uidAAAA')
+    await chat.open_target('好友A',retries=0)
+    await chat.open_target('好友A',retries=0)
+    assert chat.resolved_uid=='uidAAAA'
+    assert await page.evaluate('clicks')==0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('header_uid', [None, 'uidBBBB'])
 async def test_deferred_header_proof_missing_or_wrong_never_sends(page, header_uid):
     await page.locator('#results a').evaluate('(e)=>e.remove()')

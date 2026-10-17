@@ -130,6 +130,28 @@ def test_stable_uid_config(config_env, monkeypatch):
     assert runner.load_safe_config()[3] == ["MS4wLjABAAAAexample"]
 
 
+@pytest.mark.parametrize('event,override,allowed', [
+    ('workflow_dispatch', {}, True),
+    ('schedule', {}, False),
+    ('push', {}, False),
+    ('workflow_dispatch', {'date':'2026-10-16'}, False),
+    ('workflow_dispatch', {'sec_uid':'differentUID'}, False),
+    ('workflow_dispatch', {'text':'different message'}, False),
+    ('workflow_dispatch', {'extra':True}, False),
+])
+def test_one_shot_bound_to_manual_date_identity_and_text(monkeypatch, event, override, allowed):
+    authorization={'date':'2026-10-17','sec_uid':'expectedUID','text':'🔥',**override}
+    monkeypatch.setenv('GITHUB_EVENT_NAME',event)
+    monkeypatch.setenv('DOUYIN_CONFIG',json.dumps({'one_shot':authorization}))
+    monkeypatch.setattr(runner,'today',lambda:'2026-10-17')
+    task=SimpleNamespace(targets=[SimpleNamespace(name='A')])
+    candidates=[(SimpleNamespace(content='🔥'),)]
+    assert runner.one_shot_allowed(task,candidates,['expectedUID']) is allowed
+    assert not runner.one_shot_allowed(task,candidates*2,['expectedUID']*2)
+    assert not runner.one_shot_allowed(task,[(SimpleNamespace(content='🔥'),)*2],['expectedUID'])
+    assert not runner.one_shot_allowed(task,candidates,[None])
+
+
 def test_missing_cookie_never_starts_browser(config_env, monkeypatch, capsys):
     monkeypatch.delenv("DOUYIN_COOKIE")
     browser = MagicMock()
