@@ -9,6 +9,7 @@ from app.safe_chat import SafeChat, TargetCheckError
 from app.safe_sender import send_once
 from app.douyin import PageOperationError
 from app import safe_main as runner
+from app.browser import AuthenticationError, RiskControlError
 
 
 HTML = '''<!doctype html><meta charset="utf-8">
@@ -181,4 +182,28 @@ async def test_scoped_client_identity_requires_exact_subject(page, source, uid, 
         with pytest.raises(TargetCheckError):
             await chat._search_result('好友A')
     assert len(page.context.pages)==1
+    assert await page.evaluate('clicks')==0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('marker,expected', [
+    ('', runner.LoginUnconfirmedError),
+    ('扫码登录', AuthenticationError),
+    ('安全验证', RiskControlError),
+])
+async def test_login_failure_classified_without_private_content(page, monkeypatch, capsys, marker, expected):
+    await page.locator('input').evaluate('(e)=>e.remove()')
+    await page.locator('body').evaluate('''(e,marker)=>{
+        const box=document.createElement('section');box.textContent=marker;e.append(box);
+        const privateText=document.createElement('p');privateText.textContent='PRIVATE_CONTENT_TEST';e.append(privateText);
+    }''', marker)
+    async def unconfirmed(_page):
+        raise AuthenticationError('PRIVATE_ERROR_TEST')
+    monkeypatch.setattr(runner, 'verify_login', unconfirmed)
+    with pytest.raises(expected):
+        await runner.check_login(page)
+    output=capsys.readouterr().out
+    assert '登录页面检查' in output
+    assert 'PRIVATE_' not in output
+    assert 'https://' not in output
     assert await page.evaluate('clicks')==0

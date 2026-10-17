@@ -11,6 +11,7 @@ import tempfile
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from app.browser import (AuthenticationError, RiskControlError, SearchBoxNotReadyError,
@@ -19,13 +20,49 @@ from app.config import ConfigError, load_settings, load_task, parse_auth_json
 from app.douyin import PageOperationError
 from app.durable_state import GitHubJournal, StateError
 from app.safe_chat import SafeChat, TargetCheckError, SAFE_REASONS, ensure_session
-from app.selectors import DOUYIN_CHAT_URL, SEARCH_INPUTS
+from app.selectors import DOUYIN_CHAT_URL, SEARCH_INPUTS, LOGIN_REQUIRED_MARKERS, RISK_MARKERS
 from app.douyin import first_visible
 from app.safe_sender import send_once
 
 
 class IdentityConfigError(ConfigError):
     pass
+
+
+class LoginUnconfirmedError(PageOperationError):
+    pass
+
+
+async def check_login(page):
+    try:
+        await verify_login(page)
+        await ensure_session(page)
+    except AuthenticationError:
+        # Log only fixed labels and booleans, never page text, URLs or credentials.
+        async def visible(selectors):
+            for selector in selectors:
+                try:
+                    if await page.locator(selector).first.is_visible():
+                        return True
+                except Exception:
+                    continue
+            return False
+        risk = await visible(RISK_MARKERS + ('iframe[src*="captcha"]', '[id*="captcha"]',
+                                            'text=访问过于频繁', 'text=操作频繁'))
+        login = await visible(LOGIN_REQUIRED_MARKERS)
+        search = await visible(SEARCH_INPUTS)
+        try:
+            url = urlsplit(page.url)
+            chat_route = (url.scheme == 'https' and url.hostname == 'www.douyin.com'
+                          and url.path.rstrip('/') == '/chat')
+        except ValueError:
+            chat_route = False
+        event(f"登录页面检查：私信地址={chat_route}；登录提示={login}；安全验证={risk}；搜索框={search}")
+        if risk:
+            raise RiskControlError("需要本人安全验证") from None
+        if login:
+            raise AuthenticationError("页面显示登录提示") from None
+        raise LoginUnconfirmedError("页面状态未确认，不推断凭证失效") from None
 
 
 def event(message):
@@ -96,8 +133,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
         async with open_douyin(settings) as session:
             page = session.page
             await page.goto(DOUYIN_CHAT_URL, wait_until="domcontentloaded", timeout=45000)
-            await verify_login(page)
-            await ensure_session(page)
+            await check_login(page)
             await first_visible(page, SEARCH_INPUTS, 15000)
             event("登录检查成功")
             chats = []
@@ -184,9 +220,11 @@ def main(argv=None):
     except (ConfigError, ValueError, OSError):
         event("最终状态：failed；配置错误，请检查 DOUYIN_COOKIE、DOUYIN_CONFIG 和正式发送开关；未执行发送")
     except AuthenticationError:
-        event("最终状态：failed；登录失效或无法确认，请本人重新登录并更新凭证")
+        event("最终状态：failed；页面显示需要登录，请本人重新登录并更新凭证")
     except RiskControlError:
         event("最终状态：failed；需要本人完成平台安全验证，停止任务")
+    except LoginUnconfirmedError:
+        event("最终状态：failed；未确认私信页面就绪，无法据此判断凭证失效；未执行发送")
     except TargetCheckError as exc:
         reason = SAFE_REASONS.get(exc.code, "好友身份无法确认")
         event(f"最终状态：failed；好友检查未通过：{reason}；停止任务")
