@@ -1,139 +1,76 @@
-# 🔥 抖音自动续火花
+# 抖音每日续火花：GitHub Actions 安全版
 
-[![GitHub stars](https://img.shields.io/github/stars/unmev/douyin-auto-fire?style=flat-square)](https://github.com/unmev/douyin-auto-fire/stargazers)
-![Visitors](https://visitor-badge.laobi.icu/badge?page_id=unmev.douyin-auto-fire)
+一个账号、每天北京时间 20:00、每位明确配置的好友最多一条文字消息。无需购买服务器，电脑和手机不必长期在线。默认 Dry Run，不会自动启用真实发送。
 
-> 定时自动向抖音好友发送消息，保持火花不断。基于 Playwright 模拟真实浏览器操作，可使用 GitHub Actions、Docker、云服务器或 Windows 电脑定时运行。
+基于 [unmev/douyin-auto-fire](https://github.com/unmev/douyin-auto-fire) 二次开发，保留原作者版权与 PolyForm Noncommercial 1.0.0 许可证；个人非商业用途使用，商用须另行核查授权。
 
-![douyin-auto-fire-banner.svg](https://img.908988.xyz/file/教程/douyin-auto-fire/5pdab8It.svg)
+**先阅读 [中文部署教程](docs/github-actions.md)。** 教程包含 Windows 11 本人扫码、两个 Secrets、首次状态初始化、手动测试、正式发送开关及常见问题。
 
-## 项目介绍
+## 本版本行为
 
-`douyin-auto-fire` 是一个基于 Python + Playwright 的抖音私信自动发送工具。
+- `.github/workflows/send.yml`：`0 20 * * *`，`timezone: Asia/Shanghai`，支持手动触发与同仓库串行执行。
+- `run.py`：默认只检查登录、好友唯一性、聊天标题、个人主页标识和输入框；不触发发送。
+- 兼容原项目 `friends` / `targets`、`messages[].type=text`、`value` / `content` 与 `random.choices` 数据结构。多个消息作为候选，每人每天只选择其中一条；最小版本不发送图片、群聊或原生贴纸。
+- 正式发送必须在 `targets` 中填写本人核对的好友主页 URL `/user/` 后的 `sec_uid`。仅昵称配置兼容 Dry Run，也必须找到唯一精确匹配和可见个人主页链接；搜索与聊天中的标识必须一致。不会回退到模糊匹配、群聊或隐藏结果。
+- 发送前把当天整批任务预占状态提交到 `douyin-send-state` 分支的 `daily-state.json`。正式发送只在预占写入成功且读回确认后开始。
+- 当天已有 `reserved`、`success` 或 `unknown`，整批跳过。修改好友、候选文字或重跑任务均不清空当天记录。部分好友失败后，剩余好友当天也不自动补发。
+- 状态接口超时、缺失、损坏、冲突均停止；没有清空历史、自动重建或强制重试功能。不使用可能过期或被清理的 Actions Cache 作为发送凭据。
+- 复用原项目新发出消息气泡及发送中/失败状态检查，再核对完整文字与目标身份。未知结果按 `unknown` 停止；不点击重试，不将按钮点击视为成功。
+- 不上传截图、Trace、DOM、原始异常、Cookie、好友昵称或消息正文。日志只使用好友序号、时间及状态；状态分支仅记录日期、状态和 GitHub 运行编号。
 
-通过模拟浏览器操作，可以按照配置自动向指定好友发送文字、图片或抖音原生表情，并支持多种运行方式。
+## 最小配置
 
-如果只是想快速使用，推荐 **GitHub Actions**：不需要自己购买服务器，也不需要电脑长期保持开机。已有 Linux 服务器或 NAS 的用户推荐使用 **Docker**，也可以使用传统 Python + systemd 方式部署到云服务器，或者直接在 Windows 电脑上运行。
+下面的原项目简易结构可用于首次 Dry Run，替换好友昵称。首次只填一位本人确认的正常联系好友。正式发送需改用下一段带 `sec_uid` 的 `targets` 配置。
 
-> ⚠️ 本项目使用 Cookie / Storage State 作为登录凭证。请只保存在安全位置，不要提交到公开仓库，也不要分享给他人。
-
-## ✨ 已实现功能
-
-- ⏰ **定时自动发送**：支持 GitHub Actions、Docker Cron、systemd Timer 等方式定时运行
-- 💬 **多种消息类型**：支持文字、图片（PNG/JPG/GIF/WebP）和抖音原生表情
-- 🎲 **随机消息**：支持从多条候选消息中随机选择
-- 👥 **多好友支持**：可以同时为多个好友配置发送任务
-- 👤 **多账号支持**：GitHub Actions 当前最多支持 5 个抖音账号
-- 🧪 **Dry Run 模式**：只验证登录状态和好友定位，不真实发送消息
-- 🔒 **防重复发送**：支持记录发送历史，减少重复触发导致的重复发送
-- 🔔 **钉钉通知**：支持通过钉钉机器人接收任务结果
-- 🔗 **通用 Webhook**：支持企业微信、飞书、Slack、Discord、Telegram 等任意 Webhook 通知
-- 🛡️ **失败诊断**：失败时可保存日志、页面截图和 Playwright Trace
-- 🔐 **登录凭证灵活**：支持 Cookie 或浏览器 Storage State
-- ⏱️ **模拟真人操作**：支持随机发送间隔和输入节奏
-
-## 🚀 快速使用教程
-
-根据自己的使用场景选择一种部署方式即可：
-
-### ☁️ [GitHub Actions 部署 →](docs/github-actions.md)
-
-**推荐大多数用户使用。** 无需服务器，电脑也不需要长期在线，Fork 后配置 Secrets 即可每天自动运行。
-
-包含 Cookie 获取、配置生成、GitHub Secrets、Dry Run、定时任务、多账号和失败诊断等完整图文步骤。
-
-### 🐳 [Docker 部署 →](docs/docker.md)
-
-**推荐已有 Linux 服务器、NAS、1Panel 或宝塔环境的用户使用。** 镜像已经包含 Python、Playwright 和 Chromium，只需要在宿主机保存 `config.json`、`cookie.json` 和日志目录。
-
-默认镜像：
-
-```text
-ghcr.io/unmev/douyin-auto-fire:latest
+```json
+{
+  "friends": ["好友A"],
+  "messages": [{"type": "text", "value": "🔥"}],
+  "timezone": "Asia/Shanghai",
+  "prevent_duplicates": true,
+  "target_open_retries": 0
+}
 ```
 
-启动：
+正式发送配置（必须指定本人核对的稳定标识）：
 
-```bash
-docker compose up -d
+```json
+{
+  "targets": [{
+    "name": "好友A",
+    "sec_uid": "替换为好友主页URL中user后面的实际标识",
+    "messages": [
+      {"type": "text", "value": "🔥"},
+      {"type": "text", "value": "今天也开心"}
+    ]
+  }],
+  "prevent_duplicates": true
+}
 ```
 
-### 🖥️ [云服务器部署 →](docs/server.md)
+不要照抄 `sec_uid` 占位文字。若网页不提供可见的个人主页链接，本版会停止。真实抖音页面尚未经过此环境的登录验证，不能据离线测试宣称页面一定兼容。
 
-适合希望使用传统 Python + systemd 方式部署的 Linux VPS / 云服务器用户。
+## 本地开发与检查（Windows PowerShell）
 
-使用 Python + Playwright + Headless Chromium 运行，并通过 `systemd Timer` 每天自动执行。教程包含环境安装、Cookie 配置、Dry Run、systemd 定时、日志查看和项目更新。
+先安装 Python 3.11 或更高版本，并进入项目文件夹：
 
-### 🪟 [Windows 电脑部署 →](docs/windows.md)
-
-适合想先在自己的电脑上运行或长期使用 Windows 电脑挂机的用户。
-
-支持直接运行项目自带的扫码登录脚本生成 `storage-state.json`，也可以使用 Cookie，并可通过 Windows 任务计划程序每天自动运行。
-
-> 第一次使用无论选择哪种部署方式，都建议先配置 **1 个账号 + 1 个好友 + 1 条文字消息**，先执行 Dry Run，确认正常后再真实发送和增加其他配置。
-
-## 📢 通知配置
-
-项目支持任务完成后发送通知到多种平台：
-
-- **通用 Webhook 配置** - 支持企业微信、飞书、Slack、Discord、Telegram 等任意 Webhook 端点
-- **钉钉机器人** - 通过环境变量 `DINGTALK_WEBHOOK` 和 `DINGTALK_SECRET` 配置
-
-通知功能完全可选，不配置不影响消息发送。
-
-## 🧰 技术栈
-
-| 类别 | 内容 |
-| --- | --- |
-| 语言 | Python 3.11+ |
-| 浏览器自动化 | [Playwright](https://playwright.dev/python/) + Chromium |
-| 定时调度 | GitHub Actions / Docker Cron / systemd Timer / Windows 任务计划程序 |
-| 环境变量 | python-dotenv |
-| 时区 | tzdata |
-| 通知 | 钉钉机器人 / 通用 Webhook（企业微信、飞书、Slack 等） |
-| 支持平台 | Windows / macOS / Linux / Docker |
-
-主要依赖：
-
-```text
-playwright>=1.54,<2
-python-dotenv>=1.1,<2
-tzdata>=2025.2
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m playwright install chromium
+.\.venv\Scripts\python.exe -m compileall -q app scripts run.py
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-## ⚠️ 注意事项
+本机可运行 `python run.py --dry-run`；需先设置本机 `DOUYIN_COOKIE` 与 `DOUYIN_CONFIG`，或放置未提交的 `config.json`。不要把 Secret 值写进命令历史。正式发送仅允许 GitHub Actions，并且需要 `--send` 和 `ENABLE_REAL_SEND=true` 两道显式开关。
 
-- Cookie、Storage State 和发送配置不要直接提交到公开仓库。
-- 修改好友、消息或表情配置后，建议先运行一次 Dry Run。
-- 同一个抖音账号不要同时运行多个自动发送任务，避免重复发送。
-- GitHub-hosted Runner、Docker 主机或云服务器网络环境可能触发抖音安全验证。
-- 如果 Cookie / Storage State 失效或抖音要求验证码，需要本人重新完成登录验证。
-- 抖音网页结构发生变化时，自动化功能可能需要同步适配。
+测试与局限见 [TEST_REPORT.md](TEST_REPORT.md)，复用评估及安全边界见 [docs/REVIEW.md](docs/REVIEW.md)。`app/main.py`、多账号及通知模块保留供上游回归测试，部署入口只使用本版 `run.py`；旧 Docker/systemd/Windows 定时教程不适用于安全入口。上游原始说明见 `docs/UPSTREAM_README.md`，不要混用两套部署方式。
 
-⭐ 支持一下
+## 运行边界
 
-如果这个项目帮你省下了每天手动续火花的时间，欢迎点个 Star ⭐ 支持一下！
+免费推荐使用公开仓库的标准 `ubuntu-latest` Runner。私有仓库受账号免费额度限制，超额可能收费；本项目不使用大型 Runner、外部付费定时器或服务器。[GitHub 计费说明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 
-你的每一个 Star 都是我继续维护、修 Bug 和增加新功能的动力。
+GitHub 定时可能延迟或丢弃高负载任务；公开仓库长期无活动也可能停用 schedule。Cookie 可能失效，云端网络可能触发安全验证，页面结构可能改变。都需要本人处理，无法保证火花不断或永久免维护。[GitHub 调度说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
 
-## Star History
-
-<a href="https://www.star-history.com/?repos=unmev%2Fdouyin-auto-fire&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=unmev/douyin-auto-fire&type=date&theme=dark&legend=top-left&sealed_token=TkydV0nYtjJ4qP2Nb5Y9f7po-HgwD2pBSxu77UV_GBPhEVJk1qucxdlno9qqdKfANCMyyjgMRjk4QWqZlHQsHJbB3sEPxDIc3ExjCvi-uNJ1crMXnMCytA" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=unmev/douyin-auto-fire&type=date&legend=top-left&sealed_token=TkydV0nYtjJ4qP2Nb5Y9f7po-HgwD2pBSxu77UV_GBPhEVJk1qucxdlno9qqdKfANCMyyjgMRjk4QWqZlHQsHJbB3sEPxDIc3ExjCvi-uNJ1crMXnMCytA" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=unmev/douyin-auto-fire&type=date&legend=top-left&sealed_token=TkydV0nYtjJ4qP2Nb5Y9f7po-HgwD2pBSxu77UV_GBPhEVJk1qucxdlno9qqdKfANCMyyjgMRjk4QWqZlHQsHJbB3sEPxDIc3ExjCvi-uNJ1crMXnMCytA" />
- </picture>
-</a>
-
-## 友情链接
-
-- [LINUX DO](https://linux.do/) - 新的理想型社区
-
-## License
-
-本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。
-
-允许个人学习、研究、修改和非商业用途使用本项目；未经授权，不得将本项目或其衍生版本用于商业用途、收费服务、付费部署、倒卖或其他营利性场景。
-
-如需商业授权，请联系项目维护者。
+防重复覆盖本仓库这一账号的自动发送；无法可靠识别你在手机、其他仓库或其他工具里的手动发送。请同一账号只部署一套自动化。不绕过拉黑、隐私设置、验证码或平台风控。

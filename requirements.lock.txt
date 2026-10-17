@@ -1,0 +1,7 @@
+# Tested versions; exact direct/transitive versions for Python 3.11+.
+playwright==1.64.0
+pyee==13.0.1
+greenlet==3.5.6
+typing-extensions==4.16.0
+python-dotenv==1.2.4
+tzdata==2026.5

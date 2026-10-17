@@ -12,3 +12,10 @@ config/tasks/
 config.json
 storage-state.json
 storage_state/
+
+*cookie*.json
+*storage-state*.json*
+daily-state.json
+.env.*
+!.env.example
+!.env.account.example

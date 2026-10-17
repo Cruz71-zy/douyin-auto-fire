@@ -1,0 +1,15 @@
+{
+  "targets": [
+    {
+      "name": "好友A",
+      "sec_uid": "REPLACE_WITH_REAL_SEC_UID",
+      "messages": [
+        {"type": "text", "value": "🔥"}
+      ]
+    }
+  ],
+  "timezone": "Asia/Shanghai",
+  "prevent_duplicates": true,
+  "target_open_retries": 0,
+  "send_interval_seconds": {"min": 3, "max": 8}
+}

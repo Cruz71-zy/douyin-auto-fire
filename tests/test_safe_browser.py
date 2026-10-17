@@ -1,0 +1,132 @@
+"""Real Chromium against locally fulfilled HTML; no request reaches Douyin."""
+import pytest
+import pytest_asyncio
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from playwright.async_api import async_playwright
+
+from app.safe_chat import SafeChat
+from app.safe_sender import send_once
+from app.douyin import PageOperationError
+from app import safe_main as runner
+
+
+HTML = '''<!doctype html><meta charset="utf-8">
+<input placeholder="搜索">
+<section id="results"></section>
+<header class="RightPanelHeader">
+  <span class="RightPanelHeadertitle">好友A</span><a id="profile" href="/user/uidAAAA">个人主页</a>
+</header>
+<div class="messageEditor"><div contenteditable="true"></div></div>
+<button class="e2e-send-msg-bt">发送</button>
+<div class="messageMessageListlist"><div data-index="0"></div></div>
+<script>
+window.clicks=0;
+window.setRows = function(names, ids) {
+  document.querySelector('#results').innerHTML = names.map((n,i) =>
+    `<div class="SearchPanelitembox"><span class="SearchPanelitemname">${n}</span>
+     <a href="/user/${ids[i]}">个人主页</a><button class="SearchPanelitemchat_btn">发消息</button></div>`).join('');
+};
+setRows(['好友A'], ['uidAAAA']);
+document.querySelector('.e2e-send-msg-bt').onclick = () => {
+  window.clicks++;
+  const editor=document.querySelector('[contenteditable]');
+  const box=document.createElement('div'); box.className='messageMessageBoxmessageBox';
+  const body=document.createElement('div'); body.className='messageMessageBoxcontentBox messageMessageBoxisFromMe';
+  const content=document.createElement('span');content.setAttribute('data-e2e','msg-item-content');content.innerText=editor.innerText;
+  body.append(content);box.append(body);
+  if(window.failSend) box.insertAdjacentHTML('beforeend','<b title="重试">!</b>');
+  document.querySelector('[data-index="0"]').prepend(box);editor.innerText='';
+};
+</script>'''
+
+
+@pytest_asyncio.fixture
+async def page():
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        context = await browser.new_context()
+        # Fulfill every network request locally, including the fake chat URL.
+        await context.route('**/*', lambda route: route.fulfill(content_type='text/html', body=HTML))
+        page = await context.new_page()
+        await page.goto('https://www.douyin.com/chat')
+        yield page
+        await browser.close()
+
+
+@pytest.mark.asyncio
+async def test_unique_identity_and_local_send_confirmation(page):
+    chat = SafeChat(page)
+    await chat._search_result('好友A')
+    await chat.confirm_identity('好友A')
+    await send_once(chat, '好友A', '🔥', lambda: None)
+    assert await page.evaluate('clicks') == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('names,ids', [(['好友A','好友A'], ['uidAAAA','uidBBBB']),
+    (['好友A(7)'], ['uidAAAA']), (['好友A后缀'], ['uidAAAA'])])
+async def test_duplicate_fuzzy_and_group_names_stop(page, names, ids):
+    await page.evaluate('([names,ids])=>setRows(names,ids)', [names,ids])
+    with pytest.raises(PageOperationError):
+        await SafeChat(page)._search_result('好友A')
+    assert await page.evaluate('clicks') == 0
+
+
+@pytest.mark.asyncio
+async def test_sec_uid_disambiguates_same_nickname(page):
+    await page.evaluate("setRows(['好友A','好友A'],['uidAAAA','uidBBBB'])")
+    chat = SafeChat(page, expected_uid='uidBBBB')
+    await chat._search_result('好友A')
+    assert chat.resolved_uid == 'uidBBBB'
+    with pytest.raises(PageOperationError):
+        await chat.confirm_identity('好友A') # Header still points to uidAAAA.
+
+
+@pytest.mark.asyncio
+async def test_missing_profile_stops(page):
+    await page.locator('#results a').evaluate('(e)=>e.remove()')
+    with pytest.raises(PageOperationError):
+        await SafeChat(page)._search_result('好友A')
+
+
+@pytest.mark.asyncio
+async def test_existing_draft_never_triggers_send(page):
+    chat = SafeChat(page)
+    await chat._search_result('好友A')
+    await page.locator('[contenteditable]').fill('原有私人草稿')
+    with pytest.raises(PageOperationError):
+        await send_once(chat, '好友A', '🔥', lambda: None)
+    assert await page.evaluate('clicks') == 0
+
+
+@pytest.mark.asyncio
+async def test_failure_marker_no_retry(page):
+    chat = SafeChat(page)
+    await chat._search_result('好友A')
+    await page.evaluate('window.failSend=true')
+    with pytest.raises(PageOperationError):
+        await send_once(chat, '好友A', '🔥', lambda: None)
+    assert await page.evaluate('clicks') == 1
+
+
+@pytest.mark.asyncio
+async def test_identity_changes_before_send_zero_triggers(page):
+    chat = SafeChat(page)
+    await chat._search_result('好友A')
+    await page.locator('#profile').evaluate("e=>e.href='/user/uidBBBB'")
+    with pytest.raises(PageOperationError):
+        await send_once(chat, '好友A', '🔥', lambda: None)
+    assert await page.evaluate('clicks') == 0
+
+
+@pytest.mark.asyncio
+async def test_real_browser_complete_dry_run_never_inputs_or_sends(page, monkeypatch):
+    @asynccontextmanager
+    async def browser(settings):
+        yield SimpleNamespace(page=page)
+    monkeypatch.setattr(runner, 'open_douyin', browser)
+    task = SimpleNamespace(targets=[SimpleNamespace(name='好友A')], target_open_timeout_seconds=1)
+    assert await runner.execute(None, task, [(SimpleNamespace(content='🔥'),)], [None]) == 0
+    assert await page.evaluate('clicks') == 0
+    assert await page.locator('[contenteditable]').inner_text() == ''

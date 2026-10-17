@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import run as run_module
+import app.upstream_entry as run_module
 
 
 def _write_accounts(tmp_path: Path, content: str) -> None:
