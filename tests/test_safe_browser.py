@@ -96,6 +96,29 @@ async def test_search_row_without_profile_defers_proof_to_header(page):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('wrapper,name_class', [
+    ('rightpanelheader', 'nickname'),
+    ('ChatHeader', 'chatHeaderName'),
+    ('RightPanelHeader', 'RightPanelHeadername'),
+])
+async def test_header_name_variants_and_nested_prefix_require_uid(page, wrapper, name_class):
+    await page.locator('header').evaluate('''(header,config)=>{
+        header.className=config.wrapper;
+        const title=header.querySelector('span');
+        const wrapper=document.createElement('div');wrapper.className='RightPanelHeader-title';
+        title.replaceWith(wrapper);title.className=config.name_class;wrapper.append(title);
+    }''', {'wrapper':wrapper,'name_class':name_class})
+    chat=SafeChat(page, expected_uid='uidAAAA')
+    await chat._search_result('好友A')
+    await chat.confirm_identity('好友A')
+    assert chat.resolved_uid=='uidAAAA'
+    await page.locator('#profile').evaluate('(e)=>e.href="/user/uidBBBB"')
+    with pytest.raises(PageOperationError):
+        await chat.confirm_identity('好友A')
+    assert await page.evaluate('clicks')==0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('header_uid', [None, 'uidBBBB'])
 async def test_deferred_header_proof_missing_or_wrong_never_sends(page, header_uid):
     await page.locator('#results a').evaluate('(e)=>e.remove()')

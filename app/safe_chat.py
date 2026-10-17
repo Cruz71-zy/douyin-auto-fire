@@ -10,11 +10,13 @@ from app.selectors import LOGIN_REQUIRED_MARKERS, RISK_MARKERS, SEARCH_INPUTS
 ROWS = '[class*="SearchPanelitembox"], [class*="SearchPanelitem-box"], [class*="SearchPanelitem_box"]'
 NAMES = tuple(f'[class*="SearchPanelitem{x}"]' for x in
               ("title", "Title", "_title", "-title", "name", "Name", "_name", "-name"))
-HEADERS = '[class*="RightPanelHeader"], [class*="chatHeader"], [class*="ChatHeader"]'
+HEADERS = '[class*="RightPanelHeader" i], [class*="chatHeader" i]'
 TITLES = tuple(f'[class*="{x}"]' for x in (
     "RightPanelHeadertitle", "RightPanelHeaderTitle", "RightPanelHeader_title",
     "RightPanelHeader-title", "chatHeadertitle", "ChatHeaderTitle",
-    "chatHeader_title", "ChatHeader-title"))
+    "chatHeader_title", "ChatHeader-title", "RightPanelHeadername", "RightPanelHeaderName",
+    "RightPanelHeader_name", "RightPanelHeader-name", "chatHeaderName", "ChatHeaderName",
+    "name", "Name", "nickname", "Nickname"))
 
 SAFE_REASONS = {
     "profile_missing": "没有可见且唯一的个人主页链接",
@@ -350,10 +352,24 @@ class SafeChat(DouyinChat):
         await ensure_session(self.page)
         matches = []
         headers = self.page.locator(HEADERS)
-        for i in range(await headers.count()):
+        count = await headers.count()
+        visible_count = 0
+        for i in range(count):
             header = headers.nth(i)
-            if await header.is_visible() and await _visible_exact_text_locator(header, TITLES, name) is not None:
+            if not await header.is_visible():
+                continue
+            # A CSS-module title may share its parent's header prefix. Inspect
+            # only the top-level header so that nested title wrappers are not
+            # mistaken for a second conversation header.
+            if await header.evaluate('(node, selector)=>!!node.parentElement?.closest(selector)', HEADERS):
+                continue
+            visible_count += 1
+            if await _visible_exact_text_locator(header, TITLES, name) is not None:
                 matches.append(header)
+        shape = (count, visible_count, len(matches))
+        if getattr(self, '_last_header_shape', None) != shape:
+            self.report(f'聊天头检查：节点 {count}，可见独立容器 {visible_count}，昵称精确匹配 {len(matches)}')
+            self._last_header_shape = shape
         if len(matches) != 1:
             return TargetCheckError("title_mismatch")
         try:
