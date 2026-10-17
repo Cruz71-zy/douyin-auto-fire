@@ -279,10 +279,18 @@ class SafeChat(DouyinChat):
             '[class*="messageEditor"] [contenteditable="true"], '
             '.messageEditorinputArea[contenteditable="true"]')
         visible = []
-        for i in range(await editors.count()):
+        count = await editors.count()
+        for i in range(count):
             editor = editors.nth(i)
             if await editor.is_visible():
                 visible.append(editor)
+        self.report(f'编辑框检查：候选 {count}，可见 {len(visible)}')
+        for index, editor in enumerate(visible[:4]):
+            value = await editor.inner_text()
+            empty = not value.strip()
+            scaffold_empty = not value.replace('\u200b', '').replace('\ufeff', '').strip()
+            nested = await editor.evaluate('(node)=>!!node.parentElement?.closest("[contenteditable=true]")')
+            self.report(f'编辑框结构#{index + 1}：纯空白={empty}；移除零宽占位后空白={scaffold_empty}；嵌套可编辑={nested is True}')
         if len(visible) != 1:
             raise TargetCheckError("editor_ambiguous")
         return visible[0]

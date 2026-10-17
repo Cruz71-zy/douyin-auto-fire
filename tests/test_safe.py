@@ -184,7 +184,7 @@ def setup_execution(monkeypatch, count=2):
     chats = []
     def chat(*a, **kw):
         obj = SimpleNamespace(resolved_uid=str(next(counter)), open_target=AsyncMock(),
-                              confirm_identity=AsyncMock(), expected_uid=None)
+                              confirm_identity=AsyncMock(), message_input=AsyncMock(), expected_uid=None)
         chats.append(obj)
         return obj
     monkeypatch.setattr(runner, "SafeChat", chat)
@@ -204,6 +204,7 @@ async def test_dry_run_checks_login_all_targets_and_never_sends_or_writes(monkey
     assert await runner.execute(None, task, candidates, [None]*2, journal=journal) == 0
     assert len(chats) == 2
     assert all(c.open_target.await_count == 1 for c in chats)
+    assert all(c.message_input.await_count == 1 for c in chats)
     runner.verify_login.assert_awaited_once()
     runner.send_once.assert_not_awaited()
     assert journal.data["days"] == {}

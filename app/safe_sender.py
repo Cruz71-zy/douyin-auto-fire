@@ -7,16 +7,20 @@ from app.sender import (_mark_latest_outgoing_message, _trigger_send,
 async def send_once(chat, name, content, check_date):
     page = chat.page
     await chat.confirm_identity(name)
+    chat.report('发送阶段：身份已核验，检查空白编辑框')
     editor = await chat.message_input()
     if (await editor.inner_text()).strip():
         raise PageOperationError("存在未发送草稿，停止操作")
     await editor.fill(content)
+    chat.report('发送阶段：已输入本次授权文字，检查完整内容')
     if (await editor.inner_text()).strip() != content.strip():
         raise PageOperationError("输入内容不一致")
     before = await _mark_latest_outgoing_message(page)
     await chat.confirm_identity(name)
     check_date()
+    chat.report('发送阶段：即将触发一次发送')
     await _trigger_send(page)
+    chat.report('发送阶段：已触发一次发送，等待聊天记录确认')
     await _confirm_outgoing_message(page, before, "文字", expected_text=content)
     latest = page.locator(LATEST_OUTGOING_MESSAGE).first
     bubble = latest.locator('[data-e2e="msg-item-content"]').first

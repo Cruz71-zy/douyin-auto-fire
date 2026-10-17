@@ -163,6 +163,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                                 timeout_ms=int(task.target_open_timeout_seconds * 1000))
                 await chat.open_target(target.name, retries=0)
                 await chat.confirm_identity(target.name)
+                await chat.message_input()  # Check the actual sender's editor before reservation.
                 if chat.resolved_uid in resolved:
                     raise PageOperationError("多个配置指向同一好友")
                 resolved.add(chat.resolved_uid)
