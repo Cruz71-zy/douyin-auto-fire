@@ -7,7 +7,7 @@
 | 许可证 | PolyForm Noncommercial 1.0.0，保留版权通知 | 保留 LICENSE，个人非商业使用；并非无限制商用许可 |
 | 登录与 Chromium | `app/browser.py`，支持 Cookie / storage state | 复用浏览器生命周期、Cookie 归一化与登录检测；入口仅接受抖音域名 Cookie，关闭 Trace |
 | 配置 | `app/config.py`、`models.py`，兼容 friends/targets、候选与多类型消息 | 复用解析器，附加单账号、最多十人、仅文字、强制上海日期与防重复的校验 |
-| 搜索 | `app/douyin.py` 支持多个页面选择器，也有首个匹配、群名后缀及隐藏标题回退 | 继承搜索流程，安全适配器仅接受唯一可见精确昵称、唯一个人主页标识及一致的聊天身份 |
+| 搜索 | `app/douyin.py` 支持多个页面选择器，也有首个匹配、群名后缀及隐藏标题回退 | 继承搜索流程，安全适配器仅接受唯一可见精确昵称、唯一个人主页标识及一致的聊天身份；无链接时仅允许点击唯一可见头像，通过独立主页 URL 精确核验 UID |
 | 发消息 | `app/sender.py` 检测新气泡及失败/等待标识，部分贴纸逻辑会重试 | 复用文字确认底层函数；安全入口不调用贴纸或重试逻辑，拒绝已有草稿，触发前复核身份及日期 |
 | 重复发送 | 本地 history；键包含消息和任务，缺失/变化可能重新发 | 新增 GitHub Contents API SHA 条件更新，预占每日整批；键仅按日期，配置变更不解锁 |
 | Actions | schedule 原本注释，dispatch 默认 false，失败上传 artifacts | 固定上海 20:00；默认 Dry Run；固定并发组；无截图/Trace/构建产物上传；依赖和 Action 版本锁定 |

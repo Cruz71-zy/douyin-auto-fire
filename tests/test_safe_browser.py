@@ -130,3 +130,25 @@ async def test_real_browser_complete_dry_run_never_inputs_or_sends(page, monkeyp
     assert await runner.execute(None, task, [(SimpleNamespace(content='🔥'),)], [None]) == 0
     assert await page.evaluate('clicks') == 0
     assert await page.locator('[contenteditable]').inner_text() == ''
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('profile_uid,allowed', [('uidAAAA', True), ('uidBBBB', False)])
+async def test_avatar_popup_requires_exact_configured_uid(page, profile_uid, allowed):
+    await page.locator('#results a').evaluate('(e)=>e.remove()')
+    await page.locator('#results .SearchPanelitembox').evaluate('''(row) => {
+        const avatar=document.createElement('img');
+        avatar.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+        avatar.width=24;avatar.height=24;row.prepend(avatar);
+    }''')
+    await page.locator('#results img').evaluate(
+        "(image,uid)=>{image.onclick=()=>window.open('/user/'+uid,'_blank');}", profile_uid)
+    chat = SafeChat(page, expected_uid='uidAAAA')
+    if allowed:
+        await chat._search_result('好友A')
+        assert chat.resolved_uid == 'uidAAAA'
+    else:
+        with pytest.raises(PageOperationError):
+            await chat._search_result('好友A')
+    assert len(page.context.pages) == 1
+    assert await page.evaluate('clicks') == 0
