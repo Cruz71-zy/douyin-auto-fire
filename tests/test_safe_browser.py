@@ -134,14 +134,18 @@ async def test_real_browser_complete_dry_run_never_inputs_or_sends(page, monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('profile_uid,allowed', [('uidAAAA', True), ('uidBBBB', False)])
-async def test_avatar_popup_requires_exact_configured_uid(page, profile_uid, allowed):
+@pytest.mark.parametrize('avatar_kind', ['image', 'background'])
+async def test_avatar_popup_requires_exact_configured_uid(page, profile_uid, allowed, avatar_kind):
     await page.locator('#results a').evaluate('(e)=>e.remove()')
-    await page.locator('#results .SearchPanelitembox').evaluate('''(row) => {
-        const avatar=document.createElement('img');
-        avatar.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
-        avatar.width=24;avatar.height=24;row.prepend(avatar);
-    }''')
-    await page.locator('#results img').evaluate(
+    await page.locator('#results .SearchPanelitembox').evaluate('''(row,kind) => {
+        const avatar=document.createElement(kind==='image'?'img':'div');
+        avatar.className='test-avatar';
+        const resource='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+        if(kind==='image') avatar.src=resource;
+        else avatar.style.backgroundImage='url('+resource+')';
+        avatar.style.width='24px';avatar.style.height='24px';row.prepend(avatar);
+    }''', avatar_kind)
+    await page.locator('#results .test-avatar').evaluate(
         "(image,uid)=>{image.onclick=()=>window.open('/user/'+uid,'_blank');}", profile_uid)
     chat = SafeChat(page, expected_uid='uidAAAA')
     if allowed:

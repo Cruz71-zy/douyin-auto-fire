@@ -1,6 +1,7 @@
 """Conservative adapter for the upstream Douyin DOM and text sender."""
 from __future__ import annotations
 
+import json
 from urllib.parse import urlsplit
 from app.browser import AuthenticationError, RiskControlError, _any_visible
 from app.douyin import DouyinChat, PageOperationError, _visible_exact_text_locator, first_visible
@@ -26,6 +27,7 @@ SAFE_REASONS = {
     "editor_ambiguous": "聊天编辑器不唯一",
     "profile_popup_missing": "头像未打开可核验的独立个人主页",
     "profile_replaced_chat": "个人主页替换了聊天页面，无法保持身份绑定",
+    "avatar_ambiguous": "网页没有唯一可操作的头像入口",
 }
 
 
@@ -106,8 +108,26 @@ class SafeChat(DouyinChat):
             image = images.nth(index)
             if await image.is_visible():
                 avatars.append(image)
+        image_count = len(avatars)
+        # Require an explicit avatar component. Arbitrary images in a chat header
+        # could be call/action icons, so never click one merely because it is the
+        # only image. Background avatars and nested avatar images are supported.
+        selector = ('[class*="avatar" i], [class*="avator" i], [class*="avtar" i], '
+                    'img[alt="头像"], img[alt="avatar" i]')
+        components = scope.locator(selector)
+        avatars = []
+        for index in range(await components.count()):
+            component = components.nth(index)
+            if not await component.is_visible():
+                continue
+            nested = await component.evaluate(
+                "(element, selector) => !!element.parentElement?.closest(selector)", selector)
+            if not nested:
+                avatars.append(component)
+        self.report(f"头像入口检查：可见图片 {image_count}，独立头像容器 {len(avatars)}")
         if len(avatars) != 1:
-            raise TargetCheckError("profile_missing")
+            await self._report_shape(scope)
+            raise TargetCheckError("avatar_ambiguous")
         context = self.page.context
         previous_pages = tuple(context.pages)
         chat_url = self.page.url
@@ -139,6 +159,34 @@ class SafeChat(DouyinChat):
                     await opened_page.close()
                 except Exception:
                     pass
+
+    async def _report_shape(self, scope):
+        # Boolean structural facts only: no text, class names, attribute values,
+        # image URLs, profile IDs, page HTML or React state can enter logs.
+        try:
+            shape = await scope.evaluate("""root => [...root.querySelectorAll('*')].slice(0, 32).map(el => {
+                const style=getComputedStyle(el);
+                return {tag:el.tagName.toLowerCase(),
+                    avatar:/avatar|avator|avtar/i.test(typeof el.className==='string'?el.className:''),
+                    visible:!!el.getClientRects().length&&style.visibility!=='hidden'&&style.display!=='none',
+                    background:style.backgroundImage!=='none',
+                    link:el.tagName==='A',
+                    button:el.tagName==='BUTTON'||el.getAttribute('role')==='button',
+                    children:el.childElementCount};
+            })""")
+            safe = []
+            for node in shape[:32]:
+                if not isinstance(node, dict):
+                    continue
+                tag = node.get("tag")
+                tag = tag if tag in {"div", "span", "img", "svg", "path", "a", "button", "p", "i"} else "other"
+                safe.append({"tag": tag, **{key: node.get(key) is True for key in
+                    ("avatar", "visible", "background", "link", "button")},
+                    "children": min(100, max(0, node.get("children", 0)))
+                    if type(node.get("children")) is int else 0})
+            self.report("头像结构检查：" + json.dumps(safe, ensure_ascii=True, separators=(",", ":")))
+        except Exception:
+            self.report("头像结构检查：无法读取结构计数")
 
     async def _open_target_once(self, name):
         await ensure_session(self.page)
