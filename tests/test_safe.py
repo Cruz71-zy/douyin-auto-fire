@@ -116,7 +116,8 @@ def test_compatible_multiple_friends_and_candidates(config_env):
 @pytest.mark.parametrize("override", [
     {"friends": ["A", "A"]}, {"messages": [{"type": "image", "value": "x.png"}]},
     {"messages": []}, {"prevent_duplicates": False}, {"timezone": "UTC"},
-    {"friends": []}, {"messages": [{"type": "text", "value": "x"*201}]}])
+    {"friends": []}, {"messages": [{"type": "text", "value": "x"*201}]},
+    {"messages": [{"type":"text","value":"\u200b"}]}])
 def test_unsafe_config_rejected(config_env, monkeypatch, override):
     config_env.update(override)
     monkeypatch.setenv("DOUYIN_CONFIG", json.dumps(config_env))
@@ -184,7 +185,9 @@ def setup_execution(monkeypatch, count=2):
     chats = []
     def chat(*a, **kw):
         obj = SimpleNamespace(resolved_uid=str(next(counter)), open_target=AsyncMock(),
-                              confirm_identity=AsyncMock(), message_input=AsyncMock(), expected_uid=None)
+                              confirm_identity=AsyncMock(),
+                              message_input=AsyncMock(return_value=SimpleNamespace(inner_text=AsyncMock(return_value=''))),
+                              expected_uid=None)
         chats.append(obj)
         return obj
     monkeypatch.setattr(runner, "SafeChat", chat)

@@ -3,10 +3,11 @@ import pytest
 import pytest_asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 from playwright.async_api import async_playwright
 
 from app.safe_chat import SafeChat, TargetCheckError
-from app.safe_sender import send_once
+from app.safe_sender import send_once, editor_text
 from app.douyin import PageOperationError
 from app import safe_main as runner
 from app.browser import AuthenticationError, RiskControlError
@@ -161,6 +162,59 @@ async def test_existing_draft_never_triggers_send(page):
     with pytest.raises(PageOperationError):
         await send_once(chat, '好友A', '🔥', lambda: None)
     assert await page.evaluate('clicks') == 0
+
+
+@pytest.mark.parametrize('value,expected', [
+    ('\u200b',''), ('\ufeff\n\u200b',''), (' \u200b \ufeff \n',''),
+    ('\u200b🔥\ufeff','🔥'), ('已有草稿','已有草稿'),
+    ('👨\u200d👩\u200d👧','👨\u200d👩\u200d👧'),
+])
+def test_editor_scaffolding_preserves_real_text_and_emoji(value,expected):
+    assert editor_text(value)==expected
+
+
+@pytest.mark.asyncio
+async def test_zero_width_empty_draft_allows_exactly_one_local_send(page):
+    chat=SafeChat(page,expected_uid='uidAAAA')
+    await chat._search_result('好友A')
+    await page.locator('[contenteditable]').fill('\u200b')
+    await send_once(chat,'好友A','🔥',lambda:None)
+    assert await page.evaluate('clicks')==1
+
+
+@pytest.mark.asyncio
+async def test_zero_width_wrapped_real_draft_still_blocks_send(page):
+    chat=SafeChat(page,expected_uid='uidAAAA')
+    await chat._search_result('好友A')
+    await page.locator('[contenteditable]').fill('\u200b已有草稿\ufeff')
+    with pytest.raises(PageOperationError):
+        await send_once(chat,'好友A','🔥',lambda:None)
+    assert await page.evaluate('clicks')==0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('draft,allowed', [('\u200b',True), ('\u200b已有草稿\ufeff',False)])
+async def test_preflight_preserves_editor_and_rejects_real_draft_before_reservation(page, monkeypatch, draft, allowed):
+    # execute() navigates to /chat, so the draft must exist in the loaded fixture,
+    # not only in the DOM that navigation replaces.
+    body=HTML.replace('<div contenteditable="true"></div>', '<div contenteditable="true">'+draft+'</div>')
+    await page.route('**/*',lambda route:route.fulfill(content_type='text/html',body=body))
+    @asynccontextmanager
+    async def browser(settings):
+        yield SimpleNamespace(page=page)
+    monkeypatch.setattr(runner,'open_douyin',browser)
+    journal=SimpleNamespace(contains=lambda day:False,reserve=MagicMock(),finish=MagicMock())
+    task=SimpleNamespace(targets=[SimpleNamespace(name='好友A')],target_open_timeout_seconds=1)
+    arguments=(None,task,[(SimpleNamespace(content='🔥'),)],['uidAAAA'])
+    if allowed:
+        assert await runner.execute(*arguments,dry_run=True,journal=journal)==0
+    else:
+        with pytest.raises(TargetCheckError) as exc:
+            await runner.execute(*arguments,dry_run=False,journal=journal)
+        assert exc.value.code=='draft_present'
+    journal.reserve.assert_not_called()
+    assert await page.evaluate('clicks')==0
+    assert await page.locator('[contenteditable]').inner_text()==draft
 
 
 @pytest.mark.asyncio

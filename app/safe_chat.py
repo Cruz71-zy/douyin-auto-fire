@@ -27,6 +27,7 @@ SAFE_REASONS = {
     "uid_mismatch": "当前聊天的固定身份标识不一致",
     "composer_missing": "当前聊天输入框不可用",
     "editor_ambiguous": "聊天编辑器不唯一",
+    "draft_present": "当前聊天存在真实未发送草稿，未修改或发送",
     "profile_popup_missing": "头像未打开可核验的独立个人主页",
     "profile_replaced_chat": "个人主页替换了聊天页面，无法保持身份绑定",
     "avatar_ambiguous": "网页没有唯一可操作的头像入口",
@@ -132,8 +133,6 @@ class SafeChat(DouyinChat):
         super().__init__(page, **kwargs)
         self.expected_uid = expected_uid
         self.resolved_uid = None
-        # Fixed step label used only for diagnostics; never carries page data.
-        self.stage = "init"
         self.report = report or (lambda message: None)
 
     async def _identity(self, scope, name):
