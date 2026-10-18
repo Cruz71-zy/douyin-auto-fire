@@ -13,7 +13,19 @@ from app import safe_main as runner
 from app.config import ConfigError
 from app.durable_state import GitHubJournal, StateError
 from app.douyin import PageOperationError
+from app.safe_chat import TargetCheckError
 from scripts.actions_entry import arguments
+
+
+def test_failure_summary_preserves_fixed_stage_without_private_values():
+    error=PageOperationError('PRIVATE_COOKIE_AND_CHAT_CONTENT')
+    error.code='PRIVATE_CODE'
+    summary=runner.exception_summary(error,'send_editor_blank')
+    assert 'send_editor_blank' in summary and 'PageOperationError' in summary
+    assert 'PRIVATE' not in summary
+    summary=runner.exception_summary(error,'private_stage_data')
+    assert 'unknown' in summary and 'private_stage_data' not in summary
+    assert 'draft_present' in runner.exception_summary(TargetCheckError('draft_present'),'preflight_editor')
 
 
 class MemoryJournal(GitHubJournal):

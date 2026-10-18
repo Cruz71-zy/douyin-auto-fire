@@ -133,6 +133,7 @@ class SafeChat(DouyinChat):
         super().__init__(page, **kwargs)
         self.expected_uid = expected_uid
         self.resolved_uid = None
+        self.stage = 'init'
         self.report = report or (lambda message: None)
 
     async def _identity(self, scope, name):

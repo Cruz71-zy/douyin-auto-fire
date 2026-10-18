@@ -69,6 +69,21 @@ def event(message):
     print(f"{datetime.now(ZoneInfo('Asia/Shanghai')).isoformat(timespec='seconds')} {message}", flush=True)
 
 
+def exception_summary(exc, stage='unknown'):
+    """Preserve stage diagnostics without logging exception messages or page data."""
+    stages={'init','preflight','preflight_open','preflight_identity','preflight_editor',
+            'send_reopen','send_identity','post_send_identity','send_identity_before_edit',
+            'send_editor_blank','send_fill','send_verify_text','send_mark_baseline',
+            'send_identity_before_trigger','send_trigger','send_confirm_outgoing','send_verify_bubble'}
+    label=stage if isinstance(stage,str) and stage in stages else 'unknown'
+    name=type(exc).__name__
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,40}',name):
+        name='Exception'
+    code=getattr(exc,'code',None)
+    suffix=f'；代码 {code}' if isinstance(code,str) and code in SAFE_REASONS else ''
+    return f'失败细节：阶段 {label}；类型 {name}{suffix}'
+
+
 def today():
     return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
@@ -147,6 +162,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             return 0
     reserved = False
     attempted = False
+    active_chat = None
     try:
         async with open_douyin(settings) as session:
             page = session.page
@@ -161,8 +177,12 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                 chat = SafeChat(page, expected_uid=uids[index],
                                 report=lambda message, number=index + 1: event(f"好友#{number}：{message}"),
                                 timeout_ms=int(task.target_open_timeout_seconds * 1000))
+                active_chat = chat
+                chat.stage = 'preflight_open'
                 await chat.open_target(target.name, retries=0)
+                chat.stage = 'preflight_identity'
                 await chat.confirm_identity(target.name)
+                chat.stage = 'preflight_editor'
                 editor = await chat.message_input()
                 if editor_text(await editor.inner_text()):
                     raise TargetCheckError('draft_present')
@@ -183,9 +203,12 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                 return 0
             reserved = True
             for index, (target, chat) in enumerate(zip(task.targets, chats)):
+                active_chat = chat
                 if today() != day:
                     raise StateError("运行跨越日期，停止发送")
+                chat.stage = 'send_reopen'
                 await chat.open_target(target.name, retries=0)
+                chat.stage = 'send_identity'
                 await chat.confirm_identity(target.name)
                 message = random.choice(candidates[index])
                 # Upstream sender validates a new outgoing bubble and failure/pending markers.
@@ -194,6 +217,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                     if today() != day:
                         raise StateError("运行跨越日期，停止发送")
                 await send_once(chat, target.name, message.content, check_date)
+                chat.stage = 'post_send_identity'
                 await chat.confirm_identity(target.name)
                 event(f"好友#{index + 1}：发送成功（新消息及页面发送状态已确认）")
                 if index + 1 < len(chats):
@@ -201,7 +225,8 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             journal.finish(day, "success")
             event("最终状态：success")
             return 0
-    except Exception:
+    except Exception as exc:
+        event(exception_summary(exc,getattr(active_chat,'stage','preflight')))
         if reserved:
             try:
                 journal.finish(day, "unknown")
