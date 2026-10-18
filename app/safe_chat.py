@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import urlsplit
 from app.browser import AuthenticationError, RiskControlError, _any_visible
 from app.douyin import DouyinChat, PageOperationError, _visible_exact_text_locator, first_visible
 from app.selectors import LOGIN_REQUIRED_MARKERS, RISK_MARKERS, SEARCH_INPUTS
+from app.sender import LATEST_OUTGOING_MESSAGE, SEND_FAILURE_MARKERS, SEND_PENDING_MARKERS, _marker_visible
 
 ROWS = '[class*="SearchPanelitembox"], [class*="SearchPanelitem-box"], [class*="SearchPanelitem_box"]'
 NAMES = tuple(f'[class*="SearchPanelitem{x}"]' for x in
@@ -400,3 +402,27 @@ class SafeChat(DouyinChat):
         error = await self._chat_open_error(name)
         if error:
             raise error
+
+    async def inspect_recent_outgoing(self, expected_text):
+        """Read only the latest outgoing bubble; never infer a retry permission."""
+        latest=self.page.locator(LATEST_OUTGOING_MESSAGE).first
+        if not await latest.count():
+            self.report('最近发出消息核对：未找到可读消息；未执行发送')
+            return
+        body=latest.locator('[data-e2e="msg-item-content"]').first
+        matches=bool(await body.count()) and (await body.inner_text()).strip()==expected_text.strip()
+        failed=await _marker_visible(latest,SEND_FAILURE_MARKERS)
+        pending=await _marker_visible(latest,SEND_PENDING_MARKERS)
+        self.report(f'最近发出消息核对：可见={await latest.is_visible()}；文字完全匹配={matches}；失败标记={failed}；发送中标记={pending}')
+        groups=latest.locator('xpath=ancestor::*[@data-index][1]')
+        times=[]
+        if await groups.count():
+            labels=groups.locator('time, [class*="time" i]')
+            for index in range(min(8,await labels.count())):
+                label=labels.nth(index)
+                if not await label.is_visible():
+                    continue
+                value=(await label.inner_text()).strip()
+                if re.fullmatch(r'(?:(?:\d{4}[-/.年])?\d{1,2}[-/.月]\d{1,2}日?\s*)?(?:今天|昨天|前天)?\s*\d{1,2}:\d{2}',value):
+                    times.append(value)
+        self.report('最近发出消息时间标签：'+json.dumps(times,ensure_ascii=False)+'；只读核对不证明本轮送达')

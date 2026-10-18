@@ -194,6 +194,9 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                 chats.append(chat)
                 event(f"好友#{index + 1}：唯一身份和聊天检查成功")
             if dry_run:
+                if (json.loads(os.getenv('DOUYIN_CONFIG','{}')).get('inspect_receipt') is True
+                        and len(chats)==1):
+                    await chats[0].inspect_recent_outgoing(candidates[0][0].content)
                 event("最终状态：dry_run_success；真实发送次数 0")
                 return 0
             if today() != day:
