@@ -1,4 +1,5 @@
--r requirements.lock.txt
+-r requirements-auth.txt
 pytest==8.4.2
 pytest-asyncio==1.4.0
 PyYAML==6.0.3
+

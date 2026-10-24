@@ -23,6 +23,8 @@ from app.safe_chat import SafeChat, TargetCheckError, SAFE_REASONS, ensure_sessi
 from app.selectors import DOUYIN_CHAT_URL, SEARCH_INPUTS, LOGIN_REQUIRED_MARKERS, RISK_MARKERS
 from app.douyin import first_visible
 from app.safe_sender import send_once, editor_text
+from app.auth_state import capture_storage_state, douyin_domain, normalize_storage_state
+from app.session_store import EncryptedSessionStore
 
 
 class IdentityConfigError(ConfigError):
@@ -111,16 +113,21 @@ def load_safe_config():
     # This entry point never captures page data or invokes upstream notifications.
     settings = replace(settings, trace=False, headless=True, dingtalk_webhook=None,
                        dingtalk_secret=None, webhook_url=None)
-    if not settings.cookie:
-        raise ConfigError("缺少 DOUYIN_COOKIE")
-    cookies = parse_auth_json(settings.cookie, "DOUYIN_COOKIE")
-    if not isinstance(cookies, list):
-        raise ConfigError("DOUYIN_COOKIE 必须为 Cookie 数组")
-    cookies = _normalize_cookies(cookies)
-    if any(c["domain"].lstrip(".") != "douyin.com" and
-           not c["domain"].lstrip(".").endswith(".douyin.com") for c in cookies):
-        raise ConfigError("Cookie 仅允许抖音域名")
-    settings = replace(settings, cookie=json.dumps(cookies), storage_state=None)
+    if settings.storage_state:
+        # Keep cookies AND origin storage. Never fall back to an older cookie
+        # when the explicitly selected snapshot is malformed or expired.
+        state = normalize_storage_state(parse_auth_json(settings.storage_state, "DOUYIN_STORAGE_STATE"))
+        settings = replace(settings, cookie=None, storage_state=json.dumps(state))
+    else:
+        if not settings.cookie:
+            raise ConfigError("缺少 DOUYIN_STORAGE_STATE 或 DOUYIN_COOKIE")
+        cookies = parse_auth_json(settings.cookie, "DOUYIN_COOKIE")
+        if not isinstance(cookies, list):
+            raise ConfigError("DOUYIN_COOKIE 必须为 Cookie 数组")
+        cookies = _normalize_cookies(cookies)
+        if any(not douyin_domain(c["domain"]) for c in cookies):
+            raise ConfigError("Cookie 仅允许抖音域名")
+        settings = replace(settings, cookie=json.dumps(cookies))
     raw_text = os.getenv("DOUYIN_CONFIG")
     if raw_text is None:
         raw_text = settings.task_config_path.read_text(encoding="utf-8")
@@ -160,6 +167,16 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
         if journal.contains(day):
             event("最终状态：duplicate；当天已处理或状态未知，跳过全部好友")
             return 0
+    session_store = EncryptedSessionStore.from_env()
+    if session_store is not None:
+        refresh = (os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                   and os.getenv("REFRESH_LOGIN_STATE") == "true")
+        if refresh and not dry_run:
+            raise ConfigError("刷新会话仅允许手动 Dry Run")
+        latest_state = session_store.load()
+        if latest_state is not None and not refresh:
+            settings = replace(settings, cookie=None, storage_state=json.dumps(latest_state))
+            event("已加载加密持久会话")
     reserved = False
     attempted = False
     active_chat = None
@@ -170,6 +187,9 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             await check_login(page)
             await first_visible(page, SEARCH_INPUTS, 15000)
             event("登录检查成功")
+            if session_store is not None:
+                session_store.save(await capture_storage_state(session.context))
+                event("最新登录状态已加密保存；未修改当天发送记录")
             chats = []
             resolved = set()
             # Resolve every target before any reservation or message.
@@ -269,9 +289,10 @@ def main(argv=None):
     except IdentityConfigError:
         event("最终状态：failed；正式发送要求每位好友在 targets 中配置本人核对的 sec_uid；未执行发送")
     except (ConfigError, ValueError, OSError):
-        event("最终状态：failed；配置错误，请检查 DOUYIN_COOKIE、DOUYIN_CONFIG 和正式发送开关；未执行发送")
+        event("最终状态：failed；配置错误，请检查 DOUYIN_STORAGE_STATE / DOUYIN_COOKIE、DOUYIN_CONFIG 和正式发送开关；未执行发送")
     except AuthenticationError:
-        event("最终状态：failed；页面显示需要登录，请本人重新登录并更新凭证")
+        event("最终状态：auth_required；页面要求登录，请本人运行 python scripts/sync_auth.py --login --verify 完成扫码和安全同步；重复运行不能恢复失效会话")
+        auth_required_summary()
     except RiskControlError:
         event("最终状态：failed；需要本人完成平台安全验证，停止任务")
     except LoginUnconfirmedError:
@@ -282,10 +303,29 @@ def main(argv=None):
     except (PageOperationError, SearchBoxNotReadyError):
         event("最终状态：failed；好友匹配、个人主页标识或页面控件无法确认，停止任务")
     except StateError:
-        event("最终状态：failed；持久状态缺失、损坏、冲突或接口不可用，停止任务；勿删除状态重试")
+        event("最终状态：failed；发送日记或加密会话缺失、损坏、冲突或接口不可用，停止任务；勿删除发送日记重试")
     except KeyboardInterrupt:
         event("最终状态：cancelled；如已预占，当天不会自动重试")
         return 130
     except Exception:
         event("最终状态：failed；浏览器或页面操作异常；未输出原始异常以保护隐私")
     return 2
+
+
+def auth_required_summary():
+    """Only fixed maintenance instructions belong in public Actions summaries."""
+    summary = os.getenv("GITHUB_STEP_SUMMARY")
+    if not summary:
+        return
+    try:
+        with Path(summary).open("a", encoding="utf-8") as handle:
+            handle.write("\n### 登录状态需要更新\n\n"
+                         "任务已在登录检查阶段停止，未发送消息。\n\n"
+                         "1. 本机安装 `python -m pip install -r requirements-auth.txt`。\n"
+                         "2. 运行 `python scripts/sync_auth.py --login --verify`，本人完成扫码与验证码。\n"
+                         "3. 工具将完整会话加密同步，并更新引导 Secret `DOUYIN_STORAGE_STATE` 与密钥，再执行 Dry Run。不要提交凭证文件。\n"
+                         "4. 确认 Dry Run 成功后，才按现有开关决定是否启用发送。\n\n"
+                         "失效会话无法通过重试恢复；不会自动重试发送。\n")
+    except OSError:
+        event("登录维护摘要写入失败；请按上述固定提示更新凭证")
+

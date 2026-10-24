@@ -285,6 +285,11 @@ def test_workflow_safety_contract():
     data = yaml.load((root/'.github/workflows/send.yml').read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
     assert data['on']['schedule'] == [{'cron': '0 20 * * *', 'timezone': 'Asia/Shanghai'}]
     assert data['on']['workflow_dispatch']['inputs']['dry_run']['default'] == 'true'
+    assert data['on']['workflow_dispatch']['inputs']['send_once']['default'] == 'false'
+    assert data['on']['workflow_dispatch']['inputs']['send_once']['type'] == 'boolean'
+    assert data['on']['workflow_dispatch']['inputs']['refresh_session']['default'] == 'false'
+    run_step = next(step for step in data['jobs']['send']['steps'] if step.get('name') == 'Run safely')
+    assert run_step['env']['ENABLE_REAL_SEND'] == "${{ github.event_name == 'workflow_dispatch' && inputs.send_once && 'true' || vars.ENABLE_REAL_SEND }}"
     assert data['concurrency']['cancel-in-progress'] == 'false'
     source = (root/'.github/workflows/send.yml').read_text(encoding='utf-8')
     assert 'upload-artifact@' not in source
@@ -305,3 +310,4 @@ def test_init_and_send_rejected(monkeypatch):
     monkeypatch.setenv("INITIALIZE_STATE", "true")
     with pytest.raises(ValueError):
         arguments()
+

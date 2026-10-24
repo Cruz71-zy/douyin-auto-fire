@@ -1,0 +1,2 @@
+-r requirements.lock.txt
+PyNaCl==1.6.2

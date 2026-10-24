@@ -10,6 +10,14 @@ on:
         description: '只检查登录和好友（首次请保持勾选）'
         type: boolean
         default: true
+      send_once:
+        description: '仅本次正式发送（需取消 Dry Run），不打开每日发送'
+        type: boolean
+        default: false
+      refresh_session:
+        description: '本人重新登录并更新 Secret 后，使用新 Secret 刷新加密会话（仅 Dry Run）'
+        type: boolean
+        default: false
       initialize_state:
         description: '仅首次初始化持久状态（禁止与正式发送同时运行）'
         type: boolean
@@ -25,7 +33,7 @@ concurrency:
 jobs:
   send:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write # Atomic durable journal updates require this permission.
@@ -40,12 +48,15 @@ jobs:
         run: python -m pip install -r requirements.lock.txt
       - name: Install Chromium
         if: inputs.initialize_state != true
-        run: python -m playwright install --with-deps chromium
+        run: python -m playwright install --with-deps --only-shell chromium
       - name: Run safely
         env:
+          DOUYIN_STORAGE_STATE: ${{ secrets.DOUYIN_STORAGE_STATE }}
+          DOUYIN_SESSION_KEY: ${{ secrets.DOUYIN_SESSION_KEY }}
+          REFRESH_LOGIN_STATE: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_session }}
           DOUYIN_COOKIE: ${{ secrets.DOUYIN_COOKIE }}
           DOUYIN_CONFIG: ${{ secrets.DOUYIN_CONFIG }}
-          ENABLE_REAL_SEND: ${{ vars.ENABLE_REAL_SEND }}
+          ENABLE_REAL_SEND: ${{ github.event_name == 'workflow_dispatch' && inputs.send_once && 'true' || vars.ENABLE_REAL_SEND }}
           REQUEST_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || github.event_name == 'schedule' && vars.ENABLE_REAL_SEND != 'true' }}
           INITIALIZE_STATE: ${{ inputs.initialize_state }}
           GH_STATE_TOKEN: ${{ github.token }}
@@ -53,3 +64,4 @@ jobs:
           TRACE: 'false'
         run: python scripts/actions_entry.py
       # No screenshots, traces or upload-artifact.
+
