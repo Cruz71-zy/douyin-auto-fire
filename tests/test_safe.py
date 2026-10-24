@@ -283,7 +283,7 @@ async def test_formal_send_requires_pinned_configuration_identity(monkeypatch):
 def test_workflow_safety_contract():
     root = Path(__file__).resolve().parents[1]
     data = yaml.load((root/'.github/workflows/send.yml').read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
-    assert data['on']['schedule'] == [{'cron': '0 20 * * *', 'timezone': 'Asia/Shanghai'}]
+    assert data['on']['schedule'] == [{'cron': '30 7 * * *', 'timezone': 'Asia/Shanghai'}]
     assert data['on']['workflow_dispatch']['inputs']['dry_run']['default'] == 'true'
     assert data['on']['workflow_dispatch']['inputs']['send_once']['default'] == 'false'
     assert data['on']['workflow_dispatch']['inputs']['send_once']['type'] == 'boolean'

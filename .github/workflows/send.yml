@@ -2,7 +2,7 @@ name: Safe Douyin Daily
 
 on:
   schedule:
-    - cron: '0 20 * * *'
+    - cron: '30 7 * * *'
       timezone: Asia/Shanghai
   workflow_dispatch:
     inputs:

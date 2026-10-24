@@ -58,7 +58,9 @@ python scripts/sync_auth.py --login --verify
 
 refresh_session 输入保留，默认 false，且只允许手动 Dry Run；它会用 Secret 替换本轮登录来源。当前 Secret 是 Cookie-only 引导状态，完整状态更新应使用 sync_auth.py，正常验证保持 refresh_session=false，避免主动丢弃完整的加密会话。
 
-如需验收本轮真实发送，需显式手动选择 send_once 并取消 dry_run。send_once 默认为 false，仅手动事件生效，且仍须通过好友固定身份、发送状态和当天防重复检查。仓库变量 ENABLE_REAL_SEND 当前保持 false；本次手动选择不会永久开启日常真实发送。生产启用与实际发送验收仍在进行中，此文档不代表已上线或已成功发信。
+单次手动验收需选择 send_once 并取消 dry_run。send_once 默认为 false，仅手动事件生效，且仍须通过好友固定身份、发送状态和当天防重复检查；它不会永久改变每日发送开关。
+
+日常计划按用户要求设为每天北京时间 07:30（Asia/Shanghai），由仓库变量 ENABLE_REAL_SEND=true 开启。2026-10-24 已完成一次真实发送验收，当天成功记录会阻止同日重复发送。GitHub 调度可能延迟，07:30 是计划启动时间。
 
 ## 持续维护的边界
 
@@ -72,13 +74,13 @@ python scripts/login.py --check-only
 
 GitHub 托管 runner 每次重建，引导 Secret 是静态快照，日常运行后不会自动更新 Secret。加密会话存储保存每次登录检查成功后平台实际返回的完整状态，使后续任务可以复用；它不能保证平台延长会话有效期。auth_required 仍需要本人扫码并执行本机安全同步。修复会在 Actions Summary 给出维护步骤；不会在认证失败后自动重试发送。发送状态未知仍锁定当天，切勿删除 daily-state.json 或重建状态分支来强行重试。
 
-加密保存会话能减少重复搬运凭证的操作，不能替代本人处理平台注销和安全验证，也不承诺永久免登录。只有本人显式执行 sync_auth.py 才更新两个 GitHub Secret；日常任务不改 Secret、不绕过平台验证。本次尚未安装本机后台常驻服务或永久开启日常真实发送。
+加密保存会话能减少重复搬运凭证的操作，不能替代本人处理平台注销和安全验证，也不承诺永久免登录。只有本人显式执行 sync_auth.py 才更新两个 GitHub Secret；日常任务不改 Secret、不绕过平台验证。定时任务由 GitHub Actions 执行，本机未安装后台常驻服务。
 
 公开仓库的定时工作流在 60 天无仓库活动时可能被 GitHub 停用；定时执行也可能延迟。因此长期运行还需检查调度状态。参见 [GitHub schedule 文档](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
 
 ## 运行环境调整
 
-补丁建议将 ubuntu-latest 固定为 ubuntu-24.04，并仅安装 headless shell，减少系统镜像升级影响及多余 Chromium 下载。本次约 10 分钟耗时主要在 apt 安装系统依赖；这些改动尚未在 GitHub 上验证，不能保证消除镜像站网络延迟。没有增加自动重试或额外发送时段。
+两个工作流已固定为 ubuntu-24.04，并仅安装 headless shell，减少系统镜像升级影响及多余 Chromium 下载。Python 3.11 / 3.12 的云端测试各通过 400 项，Dry Run 与一次真实发送均已通过。安装时间仍受镜像站网络影响；没有增加自动重试或额外发送时段。
 
 参考：[Playwright 认证状态](https://playwright.dev/python/docs/auth)、[仅安装 headless shell](https://playwright.dev/python/docs/browsers#chromium-headless-shell)。
 
@@ -92,4 +94,4 @@ GitHub 托管 runner 每次重建，引导 Secret 是静态快照，日常运行
 - .gitignore：忽略临时凭证文件。
 - tests/test_auth_state.py、tests/test_login_state.py、tests/test_auth_browser.py、tests/test_session_store.py、tests/test_session_integration.py、tests/test_sync_auth.py：虚构凭证、本地网页、加密存储、Secret 容量和发送前置顺序的回归验证。
 
-补丁基于 main 的 b84f1dd6a07c51c0e2ae72c1bb563c8ab3fe1522。真实登录恢复和生产调度需要应用补丁后由本人扫码验收；离线测试不能替代实际账户验证。
+初始修复基于 b84f1dd6a07c51c0e2ae72c1bb563c8ab3fe1522，已经发布并完成真实账户验收：[云端 CI](https://github.com/Cruz71-zy/douyin-auto-fire/actions/runs/40049269473)、[Dry Run](https://github.com/Cruz71-zy/douyin-auto-fire/actions/runs/40049287664)、[一次真实发送](https://github.com/Cruz71-zy/douyin-auto-fire/actions/runs/40049615975)。
