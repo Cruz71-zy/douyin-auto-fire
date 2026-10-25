@@ -18,6 +18,10 @@ on:
         description: '本人重新登录并更新 Secret 后，使用新 Secret 刷新加密会话（仅 Dry Run）'
         type: boolean
         default: false
+      verify_target_updates:
+        description: '只验证私密名单草稿与每日消息，不发信、不改变正式名单'
+        type: boolean
+        default: false
       initialize_state:
         description: '仅首次初始化持久状态（禁止与正式发送同时运行）'
         type: boolean
@@ -56,8 +60,10 @@ jobs:
           REFRESH_LOGIN_STATE: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_session }}
           DOUYIN_COOKIE: ${{ secrets.DOUYIN_COOKIE }}
           DOUYIN_CONFIG: ${{ secrets.DOUYIN_CONFIG }}
+          DOUYIN_TARGET_UPDATES: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_target_updates && secrets.DOUYIN_TARGET_UPDATES_DRAFT || secrets.DOUYIN_TARGET_UPDATES }}
+          VERIFY_TARGET_UPDATES: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_target_updates }}
           ENABLE_REAL_SEND: ${{ github.event_name == 'workflow_dispatch' && inputs.send_once && 'true' || vars.ENABLE_REAL_SEND }}
-          REQUEST_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || github.event_name == 'schedule' && vars.ENABLE_REAL_SEND != 'true' }}
+          REQUEST_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || inputs.verify_target_updates) || github.event_name == 'schedule' && vars.ENABLE_REAL_SEND != 'true' }}
           INITIALIZE_STATE: ${{ inputs.initialize_state }}
           GH_STATE_TOKEN: ${{ github.token }}
           HEADLESS: 'true'

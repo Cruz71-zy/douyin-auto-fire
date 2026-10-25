@@ -21,6 +21,9 @@ TITLES = tuple(f'[class*="{x}"]' for x in (
     "name", "Name", "nickname", "Nickname"))
 
 SAFE_REASONS = {
+    "group_identity_missing": "当前群聊未提供唯一可核验的固定会话标识",
+    "group_type_mismatch": "当前会话未确认是群聊",
+    "group_identity_mismatch": "当前群聊固定会话标识不一致",
     "profile_missing": "没有可见且唯一的个人主页链接",
     "profile_ambiguous": "同一结果中出现多个不同的个人主页标识",
     "search_ambiguous": "搜索结果不存在或不是唯一匹配",
@@ -426,3 +429,4 @@ class SafeChat(DouyinChat):
                 if re.fullmatch(r'(?:(?:\d{4}[-/.年])?\d{1,2}[-/.月]\d{1,2}日?\s*)?(?:今天|昨天|前天)?\s*\d{1,2}:\d{2}',value):
                     times.append(value)
         self.report('最近发出消息时间标签：'+json.dumps(times,ensure_ascii=False)+'；只读核对不证明本轮送达')
+

@@ -288,8 +288,12 @@ def test_workflow_safety_contract():
     assert data['on']['workflow_dispatch']['inputs']['send_once']['default'] == 'false'
     assert data['on']['workflow_dispatch']['inputs']['send_once']['type'] == 'boolean'
     assert data['on']['workflow_dispatch']['inputs']['refresh_session']['default'] == 'false'
+    assert data['on']['workflow_dispatch']['inputs']['verify_target_updates'] == {
+        'description': '只验证私密名单草稿与每日消息，不发信、不改变正式名单',
+        'type': 'boolean', 'default': 'false'}
     run_step = next(step for step in data['jobs']['send']['steps'] if step.get('name') == 'Run safely')
     assert run_step['env']['ENABLE_REAL_SEND'] == "${{ github.event_name == 'workflow_dispatch' && inputs.send_once && 'true' || vars.ENABLE_REAL_SEND }}"
+    assert '(inputs.dry_run || inputs.verify_target_updates)' in run_step['env']['REQUEST_DRY_RUN']
     assert data['concurrency']['cancel-in-progress'] == 'false'
     source = (root/'.github/workflows/send.yml').read_text(encoding='utf-8')
     assert 'upload-artifact@' not in source

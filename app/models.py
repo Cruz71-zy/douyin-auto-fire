@@ -21,6 +21,8 @@ class Message:
 class Target:
     name: str
     messages: tuple[Message, ...]
+    kind: Literal["user", "group"] = "user"
+    group_short_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,7 @@ class TaskConfig:
     prevent_duplicates: bool
     target_open_retries: int = 1
     target_open_timeout_seconds: float = 15.0
+    daily_message_rotation: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,3 +71,4 @@ class TargetResult:
     sent: int = 0
     error: str | None = None
     target_alias: str | None = None
+

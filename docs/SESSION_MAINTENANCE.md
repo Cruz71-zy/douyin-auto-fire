@@ -38,7 +38,17 @@ python scripts/sync_auth.py --login --verify
 
 --verify 最后仅请求 send.yml 的 Dry Run：dry_run=true、send_once=false、refresh_session=false。请求成功不代表验证已经通过，需查看 Actions 的 dry_run_success。工具不修改 ENABLE_REAL_SEND 等日常变量。更新配置不会修复尚未应用的旧入口；平台拒绝跨环境会话时，云端仍可能要求重新登录，须在实际运行环境验证。
 
-## 加密保存刷新后的会话
+## 五个目标与每日消息轮换
+
+本次范围为四位好友和一个指定群聊，继续使用每天北京时间 07:30 的计划。原来的 DOUYIN_CONFIG 保持不变，新增目标的昵称、好友固定标识、群会话双标识及消息池保存在私密 Secret DOUYIN_TARGET_UPDATES；代码与公开日志只记录目标数量和核验结果。
+
+新增名单先写入 DOUYIN_TARGET_UPDATES_DRAFT。手动勾选 verify_target_updates 会强制 Dry Run，合并原配置并检查总数恰好五个，逐一核验身份、编辑框和草稿状态，不发送消息。验证成功后才将相同草稿提升为正式 Secret。每日调度只使用正式名单，验证期间原名单继续生效。
+
+好友用本人给定的精确昵称与固定 sec_uid 核验。群聊按精确群名定位，随后只读取可见聊天头直接渲染 owner 的当前会话模型，要求群类型和两个固定会话标识一致；不使用个人头像标识代替群身份，也不扫描消息或群成员列表。任一目标不能唯一核验时，在发送预占前停止。
+
+十四条中性早安短句按日期和固定目标身份轮换。固定消息池下，相邻两天不会选中同一句；同一天重跑选句相同，候选顺序调整不会改变结果。每个目标仍每天最多发送一条，已有发送日记不因名单或消息变化而清空。名单变更当天已处理的全局成功记录继续阻止补发；五目标配置通过 Dry Run 不代表已向五个目标实际发信。
+
+### 日常会话存储
 
 配置 DOUYIN_SESSION_KEY 后，完整登录状态使用 Fernet 加密，密文保存在已有 douyin-send-state 分支的 auth-state.enc，封套绑定仓库名称和格式版本。Cookie、localStorage、IndexedDB 的明文和加密密钥都不写入该分支。
 

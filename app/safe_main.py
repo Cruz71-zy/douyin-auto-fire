@@ -25,6 +25,8 @@ from app.douyin import first_visible
 from app.safe_sender import send_once, editor_text
 from app.auth_state import capture_storage_state, douyin_domain, normalize_storage_state
 from app.session_store import EncryptedSessionStore
+from app.daily_plan import merge_private_targets, daily_choice, rotation_identity
+from app.safe_group_chat import SafeGroupChat, valid_group_id
 
 
 class IdentityConfigError(ConfigError):
@@ -134,6 +136,11 @@ def load_safe_config():
     raw = json.loads(raw_text)
     if not isinstance(raw, dict):
         raise ConfigError("配置必须为对象")
+    private_updates = os.getenv("DOUYIN_TARGET_UPDATES")
+    if os.getenv("VERIFY_TARGET_UPDATES") == "true" and not private_updates:
+        raise ConfigError("待验证的私密名单草稿缺失")
+    raw = merge_private_targets(raw, private_updates)
+    raw_text = json.dumps(raw, ensure_ascii=False)
     if raw.get("timezone", "Asia/Shanghai") != "Asia/Shanghai" or raw.get("prevent_duplicates", True) is not True:
         raise ConfigError("安全入口固定上海时区且不允许关闭防重复")
     with tempfile.TemporaryDirectory(prefix="douyin-config-") as directory:
@@ -151,9 +158,17 @@ def load_safe_config():
         return [message]
     candidates = [tuple(m for message in t.messages for m in texts(message)) for t in task.targets]
     meta = raw.get("targets", [{} for _ in names])
-    uids = [m.get("sec_uid") for m in meta]
-    if any(uid is not None and (not isinstance(uid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{6,200}", uid)) for uid in uids):
+    uids = [m.get("group_id") if target.kind == "group" else m.get("sec_uid")
+            for target, m in zip(task.targets, meta)]
+    if any(uid is not None and (not valid_group_id(uid) if target.kind == "group"
+           else not isinstance(uid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{6,200}", uid))
+           for target, uid in zip(task.targets, uids)):
         raise ConfigError("sec_uid 格式无效")
+    if task.daily_message_rotation:
+        for target, options, uid in zip(task.targets, candidates, uids):
+            daily_choice(options, rotation_identity(target.kind, uid), today())
+        event(f"私密好友配置检查通过：共 {len(task.targets)} 位；已启用每日不同消息")
+        event(f"目标类型检查：好友 {sum(target.kind == 'user' for target in task.targets)} 位；群聊 {sum(target.kind == 'group' for target in task.targets)} 个；每日消息池 {len(candidates[0])} 条")
     return settings, task, candidates, uids
 
 
@@ -194,9 +209,12 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             resolved = set()
             # Resolve every target before any reservation or message.
             for index, target in enumerate(task.targets):
-                chat = SafeChat(page, expected_uid=uids[index],
-                                report=lambda message, number=index + 1: event(f"好友#{number}：{message}"),
-                                timeout_ms=int(task.target_open_timeout_seconds * 1000))
+                adapter = SafeGroupChat if getattr(target, "kind", "user") == "group" else SafeChat
+                identity_args = ({"expected_group_id": uids[index], "expected_short_id": target.group_short_id}
+                                 if getattr(target, "kind", "user") == "group" else {"expected_uid": uids[index]})
+                chat = adapter(page, **identity_args,
+                               report=lambda message, number=index + 1: event(f"目标#{number}：{message}"),
+                               timeout_ms=int(task.target_open_timeout_seconds * 1000))
                 active_chat = chat
                 chat.stage = 'preflight_open'
                 await chat.open_target(target.name, retries=0)
@@ -206,13 +224,14 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                 editor = await chat.message_input()
                 if editor_text(await editor.inner_text()):
                     raise TargetCheckError('draft_present')
-                if chat.resolved_uid in resolved:
+                resolved_key = (getattr(target, "kind", "user"), chat.resolved_uid)
+                if resolved_key in resolved:
                     raise PageOperationError("多个配置指向同一好友")
-                resolved.add(chat.resolved_uid)
+                resolved.add(resolved_key)
                 # Pin the identity across search/preflight and actual sending.
                 chat.expected_uid = chat.resolved_uid
                 chats.append(chat)
-                event(f"好友#{index + 1}：唯一身份和聊天检查成功")
+                event(f"目标#{index + 1}：唯一身份和聊天检查成功")
             if dry_run:
                 if (json.loads(os.getenv('DOUYIN_CONFIG','{}')).get('inspect_receipt') is True
                         and len(chats)==1):
@@ -233,7 +252,9 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                 await chat.open_target(target.name, retries=0)
                 chat.stage = 'send_identity'
                 await chat.confirm_identity(target.name)
-                message = random.choice(candidates[index])
+                message = (daily_choice(candidates[index], rotation_identity(getattr(target, "kind", "user"), chat.expected_uid), day)
+                           if getattr(task, "daily_message_rotation", False)
+                           else random.choice(candidates[index]))
                 # Upstream sender validates a new outgoing bubble and failure/pending markers.
                 attempted = True
                 def check_date():
@@ -242,7 +263,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                 await send_once(chat, target.name, message.content, check_date)
                 chat.stage = 'post_send_identity'
                 await chat.confirm_identity(target.name)
-                event(f"好友#{index + 1}：发送成功（新消息及页面发送状态已确认）")
+                event(f"目标#{index + 1}：发送成功（新消息及页面发送状态已确认）")
                 if index + 1 < len(chats):
                     await asyncio.sleep(random.uniform(task.interval_min, task.interval_max))
             journal.finish(day, "success")
@@ -278,6 +299,8 @@ def main(argv=None):
             return 0
         settings, task, candidates, uids = load_safe_config()
         dry_run = not args.send or args.dry_run
+        if os.getenv("VERIFY_TARGET_UPDATES") == "true" and not dry_run:
+            raise ConfigError("名单草稿只允许不发送验证")
         if not dry_run and os.getenv("ENABLE_REAL_SEND") != "true":
             if not one_shot_allowed(task, candidates, uids):
                 raise ConfigError("正式发送尚未明确启用")

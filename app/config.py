@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -96,11 +97,14 @@ def load_task(settings: Settings) -> TaskConfig:
         prevent_duplicates=raw.get("prevent_duplicates", False),
         target_open_retries=target_open_retries,
         target_open_timeout_seconds=target_open_timeout_seconds,
+        daily_message_rotation=raw.get("daily_message_rotation", False),
     )
     if not isinstance(task.continue_on_error, bool):
         raise ConfigError("continue_on_error 必须是布尔值")
     if not isinstance(task.prevent_duplicates, bool):
         raise ConfigError("prevent_duplicates 必须是布尔值")
+    if not isinstance(task.daily_message_rotation, bool):
+        raise ConfigError("daily_message_rotation 必须是布尔值")
 
     _validate_stickers(task)
     return task
@@ -127,7 +131,17 @@ def _parse_target(raw: Any, index: int, config_dir: Path) -> Target:
     messages_raw = raw.get("messages")
     if not isinstance(messages_raw, list) or not messages_raw:
         raise ConfigError(f"{label}.messages 必须是非空数组")
-    return Target(name=name, messages=tuple(_parse_message(item, f"{label}.messages[{i}]", config_dir) for i, item in enumerate(messages_raw)))
+    kind = raw.get("kind", "user")
+    if kind not in {"user", "group"}:
+        raise ConfigError("目标类型必须为好友或群聊")
+    group_short_id = None
+    if kind == "group":
+        group_short_id = raw.get("group_short_id")
+        if any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9:_-]{1,200}", value)
+               for value in (raw.get("group_id"), group_short_id)):
+            raise ConfigError("群聊必须配置已核验的固定会话标识")
+    return Target(name=name, messages=tuple(_parse_message(item, f"{label}.messages[{i}]", config_dir) for i, item in enumerate(messages_raw)),
+                  kind=kind, group_short_id=group_short_id)
 
 
 def _parse_message(raw: Any, label: str, config_dir: Path) -> Message:
@@ -269,3 +283,4 @@ def _parse_webhook_headers(value: str | None) -> dict[str, str] | None:
         key, val = pair.split("=", 1)
         headers[key.strip()] = val.strip()
     return headers if headers else None
+
