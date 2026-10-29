@@ -1,0 +1,37 @@
+name: Check Douyin Delivery
+on:
+  workflow_run:
+    workflows: ['Safe Douyin Daily']
+    types: [completed]
+  schedule:
+    - cron: '0 12 * * *'
+      timezone: Asia/Shanghai
+  workflow_dispatch:
+    inputs:
+      test_notification:
+        description: '发送一条明确标注的通知测试，并自动关闭测试提醒'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+  issues: write
+concurrency:
+  group: douyin-delivery-monitor
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Check deliveries and notify on exceptions
+        env:
+          GH_MONITOR_TOKEN: ${{ github.token }}
+          TEST_NOTIFICATION: ${{ github.event_name == 'workflow_dispatch' && inputs.test_notification }}
+        run: python scripts/check_delivery.py
