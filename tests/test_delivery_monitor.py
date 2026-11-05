@@ -1,6 +1,6 @@
 import base64
 import json
-from scripts.check_delivery import check_run, log_problem, notify, run_day
+from scripts.check_delivery import check_run, log_problem, notify, run_day, recorded_recovery
 
 
 def good_log():
@@ -62,3 +62,21 @@ def test_alert_assigned_without_private_logs():
             assert '提醒不会自动重发消息' in data['body']
             return {'html_url': 'new', 'assignees': [{'login': 'owner'}]}
     assert notify(Fake(), 'day-run-1', '未确认全部四个目标各发送成功一次') == 'new'
+
+
+def test_recovery_only_accepts_today_main_success_record():
+    class Fake:
+        status = 'success'
+        created = '2026-11-05T02:00:00Z'
+        def request(self, method, path):
+            if path.startswith('/contents/'):
+                return {'content': base64.b64encode(json.dumps({'days': {
+                    '2026-11-05': {'status': self.status, 'run_id': '123'}}}).encode()).decode()}
+            return {'id': 123, 'created_at': self.created, 'head_branch': 'main'}
+    api = Fake()
+    assert recorded_recovery(api, '2026-11-05')['id'] == 123
+    api.status = 'unknown'
+    assert recorded_recovery(api, '2026-11-05') is None
+    api.status = 'success'
+    api.created = '2026-11-04T02:00:00Z'
+    assert recorded_recovery(api, '2026-11-05') is None

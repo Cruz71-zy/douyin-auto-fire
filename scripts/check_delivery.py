@@ -87,6 +87,17 @@ def check_run(api, run):
     return None
 
 
+def recorded_recovery(api, day):
+    record = api.request('GET', '/contents/daily-state.json?ref=douyin-send-state')
+    entry = json.loads(base64.b64decode(record['content']))['days'].get(day, {})
+    if entry.get('status') != 'success' or not str(entry.get('run_id', '')).isdigit():
+        return None
+    run = api.request('GET', '/actions/runs/' + entry['run_id'])
+    if run_day(run) != day or run.get('head_branch') != 'main':
+        return None
+    return run
+
+
 def notify(api, key, reason, run=None, test=False):
     marker = '<!-- douyin-delivery-monitor:' + key + ' -->'
     # Include closed issues: acknowledging/closing an alert must not resend it.
@@ -121,10 +132,15 @@ def main():
         print('Notification test:', notify(api, 'test-' + today, '', test=True))
     if os.environ['GITHUB_EVENT_NAME'] == 'workflow_run':
         run = event['workflow_run']
-        if (run['event'] != 'schedule' or run['head_branch'] != 'main'
+        if (run['event'] not in ('schedule', 'workflow_dispatch') or run['head_branch'] != 'main'
                 or run['repository']['full_name'] != api.repo):
             print('Non-daily run: skipped')
             return
+        if run['event'] == 'workflow_dispatch':
+            recovered = recorded_recovery(api, run_day(run))
+            if recovered is None or recovered['id'] != run['id']:
+                print('Manual check without a successful delivery journal: skipped')
+                return
         runs = [run]
     else:
         try:
@@ -133,6 +149,10 @@ def main():
             print('Alert:', notify(api, today + '-check-unavailable', '检查接口不可用，无法确认今天的发送结果。'))
             return
         runs = [run for run in runs if run_day(run) == today]
+        if not runs:
+            recovered = recorded_recovery(api, today)
+            if recovered is not None:
+                runs = [recovered]
         if not runs:
             print('Alert:', notify(api, today + '-missing', '截至检查时，今天的每日发送任务尚未启动。'))
             return
