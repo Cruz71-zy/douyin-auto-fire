@@ -1,79 +1,33 @@
-# 抖音每日续火花：GitHub Actions 安全版
+# 抖音续火花：Windows 本机自动运行
 
-一个账号、每天北京时间 20:00、每位明确配置的好友最多一条文字消息。无需购买服务器，电脑和手机不必长期在线。默认 Dry Run，不会自动启用真实发送。
+在 Windows 电脑开机并登录后运行，默认每天北京时间07:30。当天错过计划时自动补跑，电脑关闭时不发送。运行不依赖 GitHub Actions；GitHub 仅用于托管代码。
 
-基于 [unmev/douyin-auto-fire](https://github.com/unmev/douyin-auto-fire) 二次开发，保留原作者版权与 PolyForm Noncommercial 1.0.0 许可证；个人非商业用途使用，商用须另行核查授权。
+基于 [unmev/douyin-auto-fire](https://github.com/unmev/douyin-auto-fire) 二次开发，保留原作者版权及 [PolyForm Noncommercial 1.0.0](LICENSE) 许可证。
 
-**先阅读 [中文部署教程](docs/github-actions.md)。** 教程包含 Windows 11 本人扫码、两个 Secrets、首次状态初始化、手动测试、正式发送开关及常见问题。
+## 已实现
 
-## 本版本行为
+- 三位好友和一个群，使用固定身份核验，发送前再次确认聊天目标。
+- 每日消息轮换，每个目标每天最多一条；所有目标预检通过后才开始发送。
+- Windows 任务计划程序：07:30、登录后补跑、每15分钟检查。当天成功后安静跳过。
+- SQLite 持久记录，原子预占，重启保留；发送结果未知时当天停止自动重试。
+- 登录态保存 cookies、localStorage、IndexedDB，检查成功后原子更新。
+- 登录失效、验证码、配置不足或发送不明时提醒，同日同原因去重。
+- 默认命令只做零发送验证。私密名单、登录态和数据库位于忽略提交的 data 目录。
 
-- `.github/workflows/send.yml`：`0 20 * * *`，`timezone: Asia/Shanghai`，支持手动触发与同仓库串行执行。
-- `run.py`：默认只检查登录、好友唯一性、聊天标题、个人主页标识和输入框；不触发发送。
-- 预检会检查实际发送编辑框和已有草稿。空编辑框中的零宽占位不算草稿；真实草稿会在写入发送状态前拦截，保持原样，不会覆盖。
-- 兼容原项目 `friends` / `targets`、`messages[].type=text`、`value` / `content` 与 `random.choices` 数据结构。多个消息作为候选，每人每天只选择其中一条；最小版本不发送图片、群聊或原生贴纸。
-- 正式发送必须在 `targets` 中填写本人核对的好友主页 URL `/user/` 后的 `sec_uid`。仅昵称配置兼容 Dry Run，也必须找到唯一精确匹配。唯一昵称可用于打开聊天，随后必须通过聊天头的可见个人主页链接、昵称一致的客户端身份字段，或明确头像入口打开的独立主页核验固定标识；如果搜索结果也提供了固定标识，它必须与聊天头一致。编辑消息前与实际发送前都再次核验身份。不会回退到模糊匹配、群聊或隐藏结果。
-- 发送前把当天整批任务预占状态提交到 `douyin-send-state` 分支的 `daily-state.json`。正式发送只在预占写入成功且读回确认后开始。
-- 当天已有 `reserved`、`success` 或 `unknown`，整批跳过。修改好友、候选文字或重跑任务均不清空当天记录。部分好友失败后，剩余好友当天也不自动补发。
-- 状态接口超时、缺失、损坏、冲突均停止；没有清空历史、自动重建或强制重试功能。不使用可能过期或被清理的 Actions Cache 作为发送凭据。
-- 复用原项目新发出消息气泡及发送中/失败状态检查，再核对完整文字与目标身份。未知结果按 `unknown` 停止；不点击重试，不将按钮点击视为成功。
-- 不上传截图、Trace、DOM、原始异常、Cookie、好友昵称或消息正文。日志只使用好友序号、时间及状态；状态分支仅记录日期、状态和 GitHub 运行编号。
+## 开始使用
 
-## 最小配置
-
-下面的原项目简易结构可用于首次 Dry Run，替换好友昵称。首次只填一位本人确认的正常联系好友。正式发送需改用下一段带 `sec_uid` 的 `targets` 配置。
-
-```json
-{
-  "friends": ["好友A"],
-  "messages": [{"type": "text", "value": "🔥"}],
-  "timezone": "Asia/Shanghai",
-  "prevent_duplicates": true,
-  "target_open_retries": 0
-}
-```
-
-正式发送配置（必须指定本人核对的稳定标识）：
-
-```json
-{
-  "targets": [{
-    "name": "好友A",
-    "sec_uid": "替换为好友主页URL中user后面的实际标识",
-    "messages": [
-      {"type": "text", "value": "🔥"},
-      {"type": "text", "value": "今天也开心"}
-    ]
-  }],
-  "prevent_duplicates": true
-}
-```
-
-不要照抄 `sec_uid` 占位文字。若网页既不提供可见主页链接或条目绑定的身份字段，也无法通过明确头像入口打开独立主页核验固定标识，本版会停止。客户端字段仅检查当前条目与直接渲染该条目的组件，不遍历联系人列表、全局状态或聊天内容；昵称和固定标识必须属于同一用户记录。同页跳转、多个主页标识、未知主页地址或标识不一致均停止。已对一个实际账号通过云端登录及好友身份 Dry Run；每个账号仍须独立验收，不能据此承诺所有页面版本持续兼容，也不等于真实发送已成功。
-
-仅演示一条而不开启每天发送：保持 `ENABLE_REAL_SEND=false`，仅配置一位好友和一条文字候选，在私有 `DOUYIN_CONFIG` 中额外加入 `"one_shot":{"date":"2026-10-17","sec_uid":"该好友的真实标识","text":"🔥"}`（日期必须改为实际演示当天的北京时间日期，UID 和文字必须与目标配置完全一致）。先完成初始化和 Dry Run，再手动运行工作流并取消勾选 Dry Run。此授权只接受手动触发，受当日持久预占约束，不放开 schedule；完成后删除 `one_shot`。过期、重名、身份无法核验或同日已有记录时仍停止，状态未知时不可删除记录重试。
-
-## 本地开发与检查（Windows PowerShell）
-
-先安装 Python 3.11 或更高版本，并进入项目文件夹：
+阅读 [本机部署与维护说明](docs/LOCAL_PC.md)。首次需要配置并核验目标、本人登录一次；登录被平台注销或要求验证码时仍需本人处理。
 
 ```powershell
-py -3 -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m playwright install chromium
-.\.venv\Scripts\python.exe -m compileall -q app scripts run.py
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts\desktop_service.py
+.\scripts\install_desktop.ps1
 ```
 
-本机可运行 `python run.py --dry-run`；需先设置本机 `DOUYIN_COOKIE` 与 `DOUYIN_CONFIG`，或放置未提交的 `config.json`。不要把 Secret 值写进命令历史。正式发送仅允许 GitHub Actions，并且需要 `--send` 和 `ENABLE_REAL_SEND=true` 两道显式开关。
+配置未完成时服务停止并提醒，不发送任何消息。若迁移时本机已保存两个好友和一个群，可用 `scripts/add_desktop_friend.py --name 昵称` 唯一核验并补齐第四位好友；此工具只验证不发送。
 
-测试与局限见 [TEST_REPORT.md](TEST_REPORT.md)，复用评估及安全边界见 [docs/REVIEW.md](docs/REVIEW.md)。`app/main.py`、多账号及通知模块保留供上游回归测试，部署入口只使用本版 `run.py`；旧 Docker/systemd/Windows 定时教程不适用于安全入口。上游原始说明见 `docs/UPSTREAM_README.md`，不要混用两套部署方式。
+不要同时启用旧云端发送。迁移应暂停旧任务并导入旧发送记录。旧方案文档留在 [历史 GitHub Actions 说明](docs/LEGACY_GITHUB.md)，不代表当前运行方式。
 
-## 运行边界
-
-免费推荐使用公开仓库的标准 `ubuntu-latest` Runner。私有仓库受账号免费额度限制，超额可能收费；本项目不使用大型 Runner、外部付费定时器或服务器。[GitHub 计费说明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
-
-GitHub 定时可能延迟或丢弃高负载任务；公开仓库长期无活动也可能停用 schedule。Cookie 可能失效，云端网络可能触发安全验证，页面结构可能改变。都需要本人处理，无法保证火花不断或永久免维护。[GitHub 调度说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
-
-防重复覆盖本仓库这一账号的自动发送；无法可靠识别你在手机、其他仓库或其他工具里的手动发送。请同一账号只部署一套自动化。不绕过拉黑、隐私设置、验证码或平台风控。
+自动化只能核验本方消息发送结果，不能保证账号永不掉线、平台规则不变或火花必定保留。

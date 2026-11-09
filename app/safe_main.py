@@ -172,7 +172,11 @@ def load_safe_config():
     return settings, task, candidates, uids
 
 
-async def execute(settings, task, candidates, uids, *, dry_run=True, journal=None):
+_AUTO_SESSION = object()
+
+
+async def execute(settings, task, candidates, uids, *, dry_run=True, journal=None,
+                  session_store=_AUTO_SESSION):
     day = today()
     if not dry_run:
         if len(uids) != len(task.targets) or any(not uid for uid in uids):
@@ -182,7 +186,8 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
         if journal.contains(day):
             event("最终状态：duplicate；当天已处理或状态未知，跳过全部好友")
             return 0
-    session_store = EncryptedSessionStore.from_env()
+    if session_store is _AUTO_SESSION:
+        session_store = EncryptedSessionStore.from_env()
     if session_store is not None:
         refresh = (os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
                    and os.getenv("REFRESH_LOGIN_STATE") == "true")

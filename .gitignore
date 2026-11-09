@@ -21,3 +21,4 @@ daily-state.json
 !.env.example
 !.env.account.example
 
+data/
