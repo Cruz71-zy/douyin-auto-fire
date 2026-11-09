@@ -186,7 +186,8 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
         if journal.contains(day):
             event("最终状态：duplicate；当天已处理或状态未知，跳过全部好友")
             return 0
-    if session_store is _AUTO_SESSION:
+    local_session = session_store is not _AUTO_SESSION
+    if not local_session:
         session_store = EncryptedSessionStore.from_env()
     if session_store is not None:
         refresh = (os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
@@ -196,7 +197,7 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
         latest_state = session_store.load()
         if latest_state is not None and not refresh:
             settings = replace(settings, cookie=None, storage_state=json.dumps(latest_state))
-            event("已加载加密持久会话")
+            event("已加载本机持久会话" if local_session else "已加载加密持久会话")
     reserved = False
     attempted = False
     active_chat = None
@@ -209,7 +210,8 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
             event("登录检查成功")
             if session_store is not None:
                 session_store.save(await capture_storage_state(session.context))
-                event("最新登录状态已加密保存；未修改当天发送记录")
+                event("最新登录状态已保存到本机；未修改当天发送记录" if local_session
+                      else "最新登录状态已加密保存；未修改当天发送记录")
             chats = []
             resolved = set()
             # Resolve every target before any reservation or message.

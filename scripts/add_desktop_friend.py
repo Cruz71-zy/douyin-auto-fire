@@ -40,7 +40,7 @@ async def configure(data, name):
     for key in ('DOUYIN_TARGET_UPDATES','DOUYIN_SESSION_KEY','DOUYIN_COOKIE','VERIFY_TARGET_UPDATES'):
         os.environ.pop(key, None)
     os.environ['DOUYIN_CONFIG'] = json.dumps(raw, ensure_ascii=False)
-    os.environ['DOUYIN_STORAGE_STATE'] = json.dumps(store.load())
+    os.environ['DOUYIN_STORAGE_STATE'] = str(store.path.resolve())
     settings, task, candidates, uids = load_safe_config()
     if await execute(settings, task, candidates, uids, dry_run=True, session_store=store):
         raise ValueError('Preflight failed')

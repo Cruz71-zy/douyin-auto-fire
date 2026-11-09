@@ -106,7 +106,8 @@ def run(directory, tick):
                 os.environ.pop(name, None)
             os.environ['DOUYIN_CONFIG'] = json.dumps(raw, ensure_ascii=False)
             store = LocalSessionStore(directory / 'storage-state.json')
-            os.environ['DOUYIN_STORAGE_STATE'] = json.dumps(store.load())
+            store.load()  # Validate before exposing the path to the config loader.
+            os.environ['DOUYIN_STORAGE_STATE'] = str(store.path.resolve())
             settings, task, candidates, uids = load_safe_config()
             if any(not value for value in uids):
                 raise ValueError('Missing fixed recipient identity')
