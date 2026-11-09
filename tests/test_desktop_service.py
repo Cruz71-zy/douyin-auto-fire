@@ -1,4 +1,5 @@
 import json
+import base64
 import os
 from scripts import desktop_service as service
 
@@ -42,3 +43,21 @@ def test_successful_day_skips_all_browser_and_config_work(tmp_path,monkeypatch):
     monkeypatch.setattr(service,'due',lambda now:True)
     monkeypatch.setattr(service,'load_safe_config',lambda: (_ for _ in ()).throw(AssertionError('must skip')))
     assert service.run(tmp_path,True)==0
+
+
+def test_native_dialog_fallback_preserves_chinese_and_quoting(monkeypatch):
+    monkeypatch.setattr(service.Path,'is_file',lambda self:False)
+    command=service.notification_command("测试提醒：今天需扫码，好友's")
+    assert command[0].endswith('powershell.exe')
+    script=base64.b64decode(command[-1]).decode('utf-16le')
+    assert "测试提醒：今天需扫码，好友''s" in script
+
+
+def test_retrying_alert_does_not_reset_delivery_journal(tmp_path):
+    journal=service.LocalJournal(tmp_path/'daily.sqlite3')
+    journal.reserve('2026-11-09')
+    journal.finish('2026-11-09','unknown')
+    assert journal.alert_once('2026-11-09','unknown')
+    journal.release_alert('2026-11-09','unknown')
+    assert journal.alert_once('2026-11-09','unknown')
+    assert journal.status('2026-11-09')=='unknown'

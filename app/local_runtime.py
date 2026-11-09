@@ -52,6 +52,10 @@ class LocalJournal:
         with self.connect() as db:
             return db.execute('INSERT OR IGNORE INTO alerts VALUES (?,?)', (day, reason)).rowcount == 1
 
+    def release_alert(self, day, reason):
+        with self.connect() as db:
+            db.execute('DELETE FROM alerts WHERE day=? AND reason=?', (day, reason))
+
 
 class LocalSessionStore:
     def __init__(self, path):

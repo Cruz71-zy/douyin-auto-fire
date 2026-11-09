@@ -1,5 +1,6 @@
 """Local desktop entry. Default is verification; --tick is the scheduled sender."""
 import argparse
+import base64
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime
@@ -50,6 +51,19 @@ def write_status(directory, status, day):
     temporary.replace(directory / 'status.json')
 
 
+def notification_command(message):
+    executable = Path('C:/Windows/System32/msg.exe')
+    if executable.is_file():
+        return [str(executable), os.environ.get('USERNAME', 'HP'), '/time:120', message]
+    # Windows Home may not include msg.exe. Use an interactive native dialog.
+    quoted = message.replace("'", "''")
+    script = ("Add-Type -AssemblyName System.Windows.Forms;"
+        "[System.Windows.Forms.MessageBox]::Show('" + quoted + "','抖音续火花提醒') | Out-Null")
+    encoded = base64.b64encode(script.encode('utf-16le')).decode('ascii')
+    return ['C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',
+            '-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded]
+
+
 def notify(journal, day, reason):
     if not journal.alert_once(day, reason):
         return
@@ -63,10 +77,12 @@ def notify(journal, day, reason):
             'delivery_uncertain_do_not_retry': '今天发送结果不明，已停止重试，请查看聊天记录。',
             'unknown': '今天发送结果不明，已停止重试，请查看聊天记录。',
         }.get(reason, '自动发送需要检查，请查看本机运行状态。')
-        subprocess.Popen(['C:/Windows/System32/msg.exe', os.environ.get('USERNAME', 'HP'),
-            '/time:120', '抖音续火花：' + description],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        try:
+            subprocess.Popen(notification_command('抖音续火花：' + description),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except OSError:
+            journal.release_alert(day, reason)  # Retry delivery of the alert, never the message.
 
 
 def run(directory, tick):
