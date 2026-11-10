@@ -267,6 +267,8 @@ async def execute(settings, task, candidates, uids, *, dry_run=True, journal=Non
                 def check_date():
                     if today() != day:
                         raise StateError("运行跨越日期，停止发送")
+                    if hasattr(journal, 'before_trigger'):
+                        journal.before_trigger(day)
                 await send_once(chat, target.name, message.content, check_date)
                 chat.stage = 'post_send_identity'
                 await chat.confirm_identity(target.name)

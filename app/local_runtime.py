@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import sqlite3
+import hashlib
 from app.auth_state import normalize_storage_state, write_storage_state
 
 
@@ -14,6 +15,8 @@ class LocalJournal:
                 CREATE TABLE IF NOT EXISTS days(day TEXT PRIMARY KEY, status TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS attempts(day TEXT PRIMARY KEY, count INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS alerts(day TEXT, reason TEXT, PRIMARY KEY(day,reason));
+                CREATE TABLE IF NOT EXISTS receipts(day TEXT, identity TEXT, status TEXT, attempts INTEGER DEFAULT 0,
+                    PRIMARY KEY(day,identity));
             ''')
 
     def connect(self):
@@ -55,6 +58,66 @@ class LocalJournal:
     def release_alert(self, day, reason):
         with self.connect() as db:
             db.execute('DELETE FROM alerts WHERE day=? AND reason=?', (day, reason))
+
+    def receipt_statuses(self, day):
+        with self.connect() as db:
+            return dict(db.execute('SELECT identity,status FROM receipts WHERE day=?', (day,)))
+
+    def prepare_receipts(self, day, identities):
+        if len(set(identities)) != 4:
+            raise ValueError('Four distinct identities required')
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            prior=dict(db.execute('SELECT identity,status FROM receipts WHERE day=?',(day,)))
+            if prior:
+                if set(prior)!=set(identities): raise ValueError('Plan changed during the day')
+                return
+            if db.execute('SELECT 1 FROM days WHERE day=?',(day,)).fetchone():
+                raise ValueError('Legacy uncertain batch cannot be retried automatically')
+            db.execute("INSERT INTO days VALUES (?,'reserved')",(day,))
+            db.executemany("INSERT INTO receipts(day,identity,status) VALUES (?,?,'pending')",[(day,i) for i in identities])
+
+    def summarize_receipts(self, day):
+        states=list(self.receipt_statuses(day).values())
+        if len(states)!=4: raise ValueError('Incomplete receipt journal')
+        status='success' if all(s=='success' for s in states) else 'unknown'
+        with self.connect() as db:
+            db.execute('UPDATE days SET status=? WHERE day=?',(status,day))
+        return status
+
+
+def receipt_identity(kind, uid):
+    return hashlib.sha256((kind+':'+uid).encode()).hexdigest()
+
+
+class TargetJournal:
+    """Retries only before the durable trigger boundary; uncertain sends stay blocked."""
+    def __init__(self, journal, identity):
+        self.journal,self.identity=journal,identity
+
+    def contains(self, day):
+        with self.journal.connect() as db:
+            row=db.execute('SELECT status,attempts FROM receipts WHERE day=? AND identity=?',(day,self.identity)).fetchone()
+        return row is None or row[0] not in ('pending','safe_failed','reserved') or row[1]>=3
+
+    def reserve(self, day):
+        with self.journal.connect() as db:
+            return db.execute("UPDATE receipts SET status='reserved',attempts=attempts+1 WHERE day=? AND identity=? AND status IN ('pending','safe_failed','reserved') AND attempts<3",(day,self.identity)).rowcount==1
+
+    def before_trigger(self, day):
+        with self.journal.connect() as db:
+            if db.execute("UPDATE receipts SET status='triggering' WHERE day=? AND identity=? AND status='reserved'",(day,self.identity)).rowcount!=1:
+                raise ValueError('Trigger reservation missing')
+
+    def finish(self, day, status):
+        with self.journal.connect() as db:
+            row=db.execute('SELECT status FROM receipts WHERE day=? AND identity=?',(day,self.identity)).fetchone()
+            if row is None: raise ValueError('Missing target journal')
+            if status=='success' and row[0]=='triggering': next_status='success'
+            elif status=='unknown' and row[0]=='reserved': next_status='safe_failed'
+            elif status=='unknown' and row[0]=='triggering': next_status='unknown'
+            else: raise ValueError('Invalid target transition')
+            db.execute('UPDATE receipts SET status=? WHERE day=? AND identity=?',(next_status,day,self.identity))
 
 
 class LocalSessionStore:

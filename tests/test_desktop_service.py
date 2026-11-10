@@ -61,3 +61,23 @@ def test_retrying_alert_does_not_reset_delivery_journal(tmp_path):
     journal.release_alert('2026-11-09','unknown')
     assert journal.alert_once('2026-11-09','unknown')
     assert journal.status('2026-11-09')=='unknown'
+
+
+def test_terminal_unknown_receipts_are_audited_without_retry_or_browser(tmp_path,monkeypatch):
+    day=service.datetime.now(service.ZoneInfo('Asia/Shanghai')).date().isoformat()
+    journal=service.LocalJournal(tmp_path/'daily.sqlite3')
+    journal.prepare_receipts(day,['a','b','c','d'])
+    for identity in ['a','b','c','d']:
+        adapter=service.TargetJournal(journal,identity)
+        adapter.reserve(day);adapter.before_trigger(day)
+        adapter.finish(day,'success' if identity=='d' else 'unknown')
+    journal.summarize_receipts(day)
+    (tmp_path/'activation.json').write_text(json.dumps({'mode':'local','enabled':True}),encoding='utf-8')
+    monkeypatch.setattr(service,'due',lambda now:True)
+    monkeypatch.setattr(service,'notify',lambda *args:None)
+    monkeypatch.setattr(service,'load_safe_config',lambda: (_ for _ in ()).throw(AssertionError('must not open browser')))
+    assert service.run(tmp_path,True)==0
+    assert journal.status(day)=='unknown'
+    record=json.loads((tmp_path/'status.json').read_text())
+    assert record['verified_successful_targets']==1
+    assert record['uncertain_targets']==3

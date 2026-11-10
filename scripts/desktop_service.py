@@ -3,12 +3,15 @@ import argparse
 import base64
 import asyncio
 from contextlib import contextmanager
+from contextlib import redirect_stdout, redirect_stderr
+from dataclasses import replace
 from datetime import datetime
 import json
 import logging
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
 from zoneinfo import ZoneInfo
 
@@ -16,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if (ROOT.parent / 'pw-browsers').is_dir():
     os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH', str(ROOT.parent / 'pw-browsers'))
 sys.path.insert(0, str(ROOT))
-from app.local_runtime import LocalJournal, LocalSessionStore, due
+from app.local_runtime import LocalJournal, LocalSessionStore, TargetJournal, receipt_identity, due
 from app.safe_main import load_safe_config, execute
 
 
@@ -46,8 +49,15 @@ def lock(path):
 
 def write_status(directory, status, day):
     temporary = directory / 'status.tmp'
-    temporary.write_text(json.dumps({'date': day, 'status': status,
-        'checked_at': datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}, ensure_ascii=False), encoding='utf-8')
+    record={'date': day, 'status': status,
+        'checked_at': datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}
+    with sqlite3.connect(directory/'daily.sqlite3') as db:
+        counts=dict(db.execute('SELECT status,COUNT(*) FROM receipts WHERE day=? GROUP BY status',(day,)))
+    if counts:
+        record['verified_successful_targets']=counts.get('success',0)
+        record['uncertain_targets']=counts.get('unknown',0)+counts.get('triggering',0)
+        record['pending_targets']=sum(counts.get(key,0) for key in ('pending','safe_failed','reserved'))
+    temporary.write_text(json.dumps(record, ensure_ascii=False), encoding='utf-8')
     temporary.replace(directory / 'status.json')
 
 
@@ -85,6 +95,32 @@ def notify(journal, day, reason):
             journal.release_alert(day, reason)  # Retry delivery of the alert, never the message.
 
 
+async def deliver_targets(settings, task, candidates, uids, journal, store, day):
+    identities=[receipt_identity(target.kind,uid) for target,uid in zip(task.targets,uids)]
+    if not journal.receipt_statuses(day):
+        # Verify the whole plan before any target may send.
+        if await execute(settings,task,candidates,uids,dry_run=True,session_store=store):
+            return 1
+    journal.prepare_receipts(day,identities)
+    for index,(target,uid,options,identity) in enumerate(zip(task.targets,uids,candidates,identities),1):
+        adapter=TargetJournal(journal,identity)
+        if adapter.contains(day):
+            continue
+        for attempt in range(2):
+            print(f'本机目标#{index}：检查与补救轮次 {attempt+1}',flush=True)
+            try:
+                await execute(settings,replace(task,targets=(target,)),(options,),(uid,),
+                    dry_run=False,journal=adapter,session_store=store)
+            except Exception as error:
+                print(f'本机目标#{index}：发送前检查未通过；类型 {type(error).__name__}',flush=True)
+            if adapter.contains(day):
+                break
+            # A proven pre-trigger failure can be checked once more; any draft
+            # remains protected by the existing blank-editor requirement.
+            await asyncio.sleep(3)
+    return 0 if journal.summarize_receipts(day)=='success' else 1
+
+
 def run(directory, tick):
     directory.mkdir(parents=True, exist_ok=True)
     now = datetime.now(ZoneInfo('Asia/Shanghai'))
@@ -104,11 +140,17 @@ def run(directory, tick):
                 write_status(directory, 'migration_required', day)
                 notify(journal, day, 'migration_required')
                 return 2
-        if tick and journal.contains(day):
+        if tick and journal.contains(day) and (journal.status(day)=='success' or not journal.receipt_statuses(day)):
             status = journal.status(day)
             write_status(directory, status, day)
             if status != 'success':
                 notify(journal, day, 'delivery_uncertain_do_not_retry')
+            return 0
+        receipts=journal.receipt_statuses(day) if tick else {}
+        if receipts and all(s in ('success','unknown','triggering') for s in receipts.values()):
+            status=journal.summarize_receipts(day)
+            write_status(directory,status,day)
+            if status!='success':notify(journal,day,'delivery_uncertain_do_not_retry')
             return 0
         try:
             config = directory / 'config.json'
@@ -136,8 +178,8 @@ def run(directory, tick):
             return 2
         logging.getLogger('douyin_sender').disabled = True
         try:
-            result = asyncio.run(execute(settings, task, candidates, uids,
-                dry_run=not tick, journal=journal, session_store=store))
+            result = asyncio.run(deliver_targets(settings,task,candidates,uids,journal,store,day)
+                if tick else execute(settings,task,candidates,uids,dry_run=True,session_store=store))
             status = journal.status(day) if tick else 'verified_no_send'
             if result or tick and status != 'success':
                 status = status or 'preflight_failed'
@@ -160,4 +202,13 @@ if __name__ == '__main__':
     parser.add_argument('--data', type=Path, default=ROOT / 'data')
     parser.add_argument('--tick', action='store_true', help='Authorized scheduled daily sending')
     args = parser.parse_args()
-    raise SystemExit(run(args.data.resolve(), args.tick))
+    directory=args.data.resolve()
+    directory.mkdir(parents=True,exist_ok=True)
+    log=directory/'service.log'
+    if log.exists() and log.stat().st_size>1_000_000:
+        (directory/'service.log.1').write_bytes(log.read_bytes()[-1_000_000:])
+        log.write_text('',encoding='utf-8')
+    with log.open('a',encoding='utf-8') as output:
+        with redirect_stdout(output),redirect_stderr(output):
+            code=run(directory,args.tick)
+    raise SystemExit(code)
